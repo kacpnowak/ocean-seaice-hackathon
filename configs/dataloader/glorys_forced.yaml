@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# The dataloader for a FORCED run: the days the shipped IFS atmosphere covers,
+# and nothing else.
+#
+#     make forcing-stats
+#     make train MODULE=tiny DATALOADER=glorys_forced NAME=forced \
+#         HYDRA_ARGS="forcing=file ++max_steps=1000"
+#
+# Same variables and same shapes as `glorys` and `glorys_tiny`; only the window
+# differs.  Use it with `forcing=file` -- with the default `forcing=none` it is
+# simply a very small ocean-only run, which is exactly what makes it the right
+# control for a forced one.
+#
+# ================== READ THIS BEFORE YOU QUOTE A NUMBER =====================
+# Both splits are inside 2024, and **2024 is the holdout split**.  This
+# dataloader exists so that the file-forcing path can be exercised end to end on
+# real data; it does not exist to produce a score.  A model trained here has
+# seen holdout data and is validated in the same year it trained on.  Report
+# what it demonstrates (that the plumbing works, what forcing costs, whether it
+# changed the loss), never how skilful it is.
+#
+# The window comes from the archive, not from a preference:  XarrayForcing has
+# valid times from 2024-01-03T01:00 to 2025-01-02T00:00 and refuses anything
+# else, so
+#     train  states 2024-01-03 .. 2024-10-30   (302 samples)
+#     val    states 2024-11-01 .. 2024-11-29   (29 samples; 20 with a 10-day rollout)
+# and the val window stops on 1 December so a 10-day rollout from its last
+# initialisation still lands inside the forcing's coverage.  The bounds live in
+# SPLIT_DATES in oceanarches/dataloaders/glorys.py.
+#
+# There is deliberately NO usable `test_args` domain here: the real test split is
+# 2021-2023 and the shipped forcing has nothing for it, so a forced run cannot be
+# scored on it.  `mode=test` and `make eval` fall back to `ifs_forced_val`, which
+# is the only split this forcing can serve -- and which is holdout.
+# ===========================================================================
+component: full
+
+n_surface_in: 7
+n_surface_out: 7
+n_level_in: 4
+n_level_out: 4
+
+dataset:
+  _target_: oceanarches.dataloaders.glorys.GlorysForecast
+  _convert_: all
+  domain: ifs_forced_train
+  variables:
+    surface: [zos, mlotst, bottomT, siconc, sithick, usi, vsi]
+    level: [thetao, so, uo, vo]
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: 24
+  timedelta_hours: 24
+  multistep: ${oc.select:module.train.rollout_iterations,1}
+  load_prev: True
+  norm_scheme: glorys
+
+validation_args:
+  domain: ifs_forced_val
+  multistep: ${oc.select:module.val.rollout_iterations,1}
+
+test_args:
+  domain: ifs_forced_val
+  multistep: ${oc.select:module.inference.rollout_iterations,1}

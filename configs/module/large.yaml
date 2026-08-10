@@ -1,0 +1,176 @@
+# ---------------------------------------------------------------------------
+# large -- 459.6 M parameters, pre-trained by the organisers on four booster
+# nodes (16x GH200) in a projected ~17 h.  You are not expected to train this
+# during the hackathon, you are expected to fine-tune it or evaluate against it.
+#
+#     python -m geoarches.main_hydra --config-path $PWD/configs mode=test \
+#         cluster=jupiter_1gpu module=large dataloader=glorys ++name=large_pretrained
+#
+# configs/module/tiny.yaml carries the commentary; only the numbers differ here.
+# ---------------------------------------------------------------------------
+project: ocean-sea-ice
+
+# DEPTH_PRESETS["large"] -- the same 13 levels as every other preset (the
+# vertical is not a scaling axis; see configs/module/tiny.yaml).
+depth_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+n_depths: 13
+
+# Per-GPU batch size. The cluster configs read it through ${module.batch_size}.
+# Measured on one GH200 (96 GB): 50.81 GiB peak, 0.542 s/step, 1.8 samples/s,
+# with gradient_checkpointing on, by the same benchmark run quoted in
+# configs/module/tiny.yaml. From the batch sweep: batch 2 does not fit.
+batch_size: 1
+
+# Wall clock, and be careful which number this is.
+#   * compute only, `make benchmark`:      0.542 s/step
+#   * a REAL training step, measured on
+#     dataloader=glorys at 60 vs 260 steps
+#     so the slope cancels start-up:       0.5909 s/step  (1.09x the above)
+# 0.5909 x 300000 = 49.2 h on ONE GPU, plus ~32 epoch boundaries -- call it 50 h.
+# That is a projection from a measured rate, not a measured run: nobody has
+# trained this preset to completion.
+#
+# More GPUs do NOT divide that. `max_steps` counts OPTIMISER steps, and one step
+# is one sample per GPU here, so extra cards buy data per step and not speed.
+# MEASURED on this preset (not extrapolated from `tiny` any more), same
+# 60-vs-260 protocol, jobs 1285596 and 1285595:
+#
+#     GPUs  nodes   s/step   samples/s   per step vs 1 GPU   throughput
+#        1      1   0.5909      1.69           --                --
+#        4      1   0.7041      5.68          1.19x         3.36x (84%)
+#       16      4   0.7694     20.80          1.30x        12.29x (77%)
+#
+# Crossing the network costs 9.3% per optimiser step and returns 3.66x the
+# samples -- 91.5% of perfect from 4 GPUs to 16 -- because a 459.6 M-parameter
+# step has enough compute to hide most of a 1.8 GB all-reduce behind it. `tiny`
+# lost 1.33x on one node; that number does not carry, which is why this one was
+# measured.
+#
+# `max_steps` here is the ONE-GPU budget, and every preset ships one.
+# scripts/pretrain_large.slurm deliberately does not use it: it derives
+# `max_steps` from a SAMPLE budget of 1.2 M -- what 300000 steps on one node
+# comes to, about 126 epochs of the 9488-sample train split -- and the size of
+# the allocation. So the shipped pre-training run is 75000 steps on 16 GPUs:
+# the same data in 16.0 h instead of 58.7 h, rather than 4.8 M samples (506
+# epochs) in 64.1 h. `num_training_steps: ${max_steps}` below makes the cosine
+# schedule follow, so the shorter run is a complete schedule, not a truncated
+# one. The booster QOS caps one job at 12 h, so it is two jobs; see that script.
+max_steps: 300000
+save_step_frequency: 25000
+limit_val_batches: 64
+
+module:
+  # geoarches' ForecastModuleWithCond with ERA5's assumptions replaced: a
+  # wet-mask-weighted loss on our 180 latitudes, the tendency normalisation taken
+  # from our own statistics, and a residual (tendency) prediction.
+  # configs/module/tiny.yaml carries the commentary.
+  _target_: oceanarches.lightning_modules.ocean_forecast.OceanForecastModule
+  name: ${name}
+  cond_dim: 256
+  # Lower than the smaller presets: wider model, longer schedule. NOT raised for
+  # the 16-GPU run, and that is a judgement call worth stating. The effective
+  # batch is 1 x the number of GPUs, so the shipped pre-training job quadruples
+  # it (4 -> 16) against the plan this value was picked for; the usual rules
+  # would put it at 4e-4 (square root) or 8e-4 (linear). Nobody has trained this
+  # preset to completion at any of the three, and the two errors are not
+  # symmetric: too high diverges 459.6 M bf16 parameters and wastes the whole
+  # run, while too low only converges more slowly. The shipped run stops at
+  # 75000 steps either way -- the ~42 h it saves against the one-node plan is
+  # calendar time, NOT slack the run can spend, and it cannot be spent by
+  # extending a run in flight: raising SAMPLE_BUDGET mid-run means relaunching
+  # at a different max_steps, which scripts/pretrain_large.slurm's resume
+  # section tells you not to do. Buying more samples means choosing a bigger
+  # SAMPLE_BUDGET BEFORE the first launch, or starting a fresh NAME. To try a
+  # different rate:
+  #   sbatch --export=ALL,EXTRA_HYDRA_ARGS="++module.module.lr=4e-4" \
+  #       scripts/pretrain_large.slurm
+  lr: 2e-4
+  betas: [0.9, 0.98]
+  weight_decay: 0.05
+  # 6.7% of the shipped 75000-step run (it was 1.7% of 300000 on one GPU).
+  # Both are inside the usual 1-10% band, so it is left alone.
+  num_warmup_steps: 5000
+  num_training_steps: ${max_steps}
+  # NO use_graphcast_coeffs / use_prev here. Both were vestigial ERA5 keys:
+  # geoarches builds one set of ERA5 loss coefficients from
+  # `use_graphcast_coeffs` and `ocean_forecast.py` deletes them on the next
+  # line, and it stores `self.use_prev` without ever reading it, because our
+  # `forward` overrides its own. Turning either off gave a bit-identical
+  # model. The two keys that really control the previous state are
+  # `embedder.n_concatenated_states` (1 = the network is given it) and the
+  # dataloader's `dataset.load_prev` (True = it is loaded). Change both.
+  loss_delta_normalization: True
+  component: ${dataloader.component}
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: ${dataloader.dataset.lead_time_hours}
+  add_input_state: True
+  clamp_physical_bounds: True
+  # Prescribed external fields, or null. `forcing=file` swaps in XarrayForcing.
+  forcing: ${forcing.source}
+
+defaults:
+  - metrics: # read from configs/module/metrics/
+      - glorys_deterministic
+      - glorys_seaice
+
+train:
+  rollout_iterations: 1
+  metrics: ${oc.dict.values:module.metrics}
+  metrics_kwargs:
+    rollout_iterations: 1
+    headline_only: True # log a few variables per step, not ~200
+val:
+  rollout_iterations: 1
+  metrics: ${oc.dict.values:module.metrics}
+  metrics_kwargs:
+    rollout_iterations: 1
+    headline_only: True
+inference:
+  rollout_iterations: 10
+  metrics: ${module.metrics}
+  metrics_kwargs:
+    rollout_iterations: ${..rollout_iterations}
+    headline_only: False # score every variable at every depth
+
+backbone:
+  _target_: geoarches.backbones.archesweather.ArchesWeatherCondBackbone
+  tensor_size: [8, 60, 120] # latent_z_dim(13) = 8, the only value geoarches accepts
+  emb_dim: 384
+  cond_dim: 256
+  num_heads: [12, 24, 24, 12]
+  window_size: [1, 6, 10]
+  droppath_coeff: 0.2
+  dropout: 0
+  depth_multiplier: 3
+  use_skip: True
+  # The two layers that mix the water column. Both hardcode 8 latent levels
+  # inside geoarches, which is exactly why every preset loads 13 depth levels:
+  # 13 -> pad to 14 -> 7 tokens -> 7 + 1 surface = 8. LinVert is a linear layer
+  # over the whole latent column; axis_attn is attention along it. Without them
+  # the depth levels would never talk to each other, because window_size[0] = 1.
+  first_interaction_layer: linear
+  axis_attn: True
+  mlp_layer: swiglu
+  mlp_ratio: 4.0
+  # A ~17 h run on 16 GPUs -- 59 h on one node for the same data -- is long
+  # enough that trading ~30% step time for the memory to keep a useful batch
+  # size is the right call.  (Every step time measured above already has this
+  # on.)
+  gradient_checkpointing: True
+
+embedder:
+  _target_: oceanarches.backbones.ocean_embedder.OceanEncodeDecodeLayer
+  surface_ch_in: ${dataloader.n_surface_in}
+  surface_ch_out: ${dataloader.n_surface_out}
+  level_ch_in: ${dataloader.n_level_in}
+  level_ch_out: ${dataloader.n_level_out}
+  n_depths: ${module.n_depths}
+  emb_dim: 384
+  out_emb_dim: 768
+  patch_size: [2, 3, 3]
+  # External (atmospheric) forcing channels, from configs/forcing/*.yaml.
+  # 0 with the default `forcing=none`; `forcing=file` reserves room for the
+  # prescribed atmosphere.  Component-to-component exchange does NOT come
+  # through here -- see oceanarches/lightning_modules/coupled.py.
+  forcing_ch: ${forcing.n_channels}
+  n_concatenated_states: 1

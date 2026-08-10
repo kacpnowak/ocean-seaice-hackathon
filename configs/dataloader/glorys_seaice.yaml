@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# The sea-ice component of the coupled pair.
+#
+# Predicts only 2-D ice fields (siconc, sithick, usi, vsi) and reads the whole
+# ocean state, including the 3-D fields.  This is the configuration with
+# `n_level_out: 0`: the embedder builds no level deconvolution at all and
+# `decode` returns a TensorDict with a `surface` key only.
+#
+# It is also the configuration most likely to be broken by a careless change to
+# the embedder, which is why tests/test_embedder.py tests it explicitly.
+# ---------------------------------------------------------------------------
+component: seaice
+
+n_surface_in: 7 # 4 predicted + 3 read from the ocean
+n_surface_out: 4
+n_level_in: 4 # thetao, so, uo, vo -- read only
+n_level_out: 0
+
+dataset:
+  _target_: oceanarches.dataloaders.glorys.GlorysForecast
+  _convert_: all
+  domain: train
+  variables:
+    # prognostic first, then forcing -- deliberately NOT the canonical order of
+    # variables.py, because the model's output must be the leading channels.
+    surface: [siconc, sithick, usi, vsi, zos, mlotst, bottomT]
+    level: [thetao, so, uo, vo]
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: 24
+  timedelta_hours: 24
+  multistep: ${oc.select:module.train.rollout_iterations,1}
+  load_prev: True
+  norm_scheme: glorys
+
+validation_args:
+  domain: val
+  multistep: ${oc.select:module.val.rollout_iterations,1}
+
+test_args:
+  domain: test
+  multistep: ${oc.select:module.inference.rollout_iterations,1}

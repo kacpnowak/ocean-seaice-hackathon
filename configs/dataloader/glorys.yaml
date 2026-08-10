@@ -1,0 +1,43 @@
+# ---------------------------------------------------------------------------
+# The baseline: one model that reads and predicts every GLORYS variable.
+# Splits: train 1993-2018 (9488 samples), val 2019-2020 (730), test 2021-2023.
+#
+# A "component" (see ComponentSpec in oceanarches/dataloaders/variables.py) is
+# defined by two lists: what it predicts and what it only reads.  This one
+# predicts everything, so the two channel counts are equal.
+# ---------------------------------------------------------------------------
+component: full
+
+# Channel counts the embedder is wired from.  `variables` below must list the
+# prognostic (predicted) channels *first*, then the forcing (read-only) ones,
+# because the model's output is the leading `n_*_out` channels of its input.
+# tests/test_configs.py checks all of this against COMPONENTS in variables.py.
+n_surface_in: 7
+n_surface_out: 7
+n_level_in: 4
+n_level_out: 4
+
+dataset:
+  _target_: oceanarches.dataloaders.glorys.GlorysForecast
+  _convert_: all # hand plain lists/dicts to the dataset, not OmegaConf nodes
+  # path: defaults to GLORYS_PREPPED from config.env
+  domain: train
+  variables:
+    surface: [zos, mlotst, bottomT, siconc, sithick, usi, vsi]
+    level: [thetao, so, uo, vo]
+  # Which of the 14 prepared depth levels to load. The size preset decides,
+  # so that `module=tiny` and the dataloader can never disagree about n_depths.
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: 24
+  timedelta_hours: 24
+  multistep: ${oc.select:module.train.rollout_iterations,1}
+  load_prev: True
+  norm_scheme: glorys
+
+validation_args:
+  domain: val
+  multistep: ${oc.select:module.val.rollout_iterations,1}
+
+test_args:
+  domain: test
+  multistep: ${oc.select:module.inference.rollout_iterations,1}

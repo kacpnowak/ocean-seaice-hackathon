@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Prescribed atmosphere, read from netCDF.
+#
+#     make forcing-stats            # once: normalisation for these channels
+#     make train MODULE=tiny DATALOADER=glorys_forced NAME=forced \
+#         HYDRA_ARGS="forcing=file"
+#
+# `forcing` is a hydra GROUP, so on a make line it has to go inside HYDRA_ARGS:
+# make parses a bare `forcing=file` as a variable assignment and drops it.
+#
+# WHAT THE ARCHIVE IS (measured, and it is not what this file used to say).
+# IFS_FORCING is 52 weekly files, 520 records, `time_counter` holding only 104
+# distinct times -- because these are FORECASTS.  Each record also carries a
+# `leadtime` (13, 37, 61, 85, 108, 132, 156, 180 or 204 h), and
+# `time_counter + leadtime` is the time the field is actually valid at.  On that
+# axis there are **478 distinct valid times covering all 366 days from
+# 2024-01-03 to 2025-01-02**, one or two per day.  XarrayForcing indexes on the
+# valid time; where two forecasts are valid at the same instant the shorter lead
+# wins.  The archive is daily, not weekly.
+#
+# Valid times fall at 00:00 and 01:00, GLORYS daily means are stamped 12:00, so
+# the match is to the nearest valid time (ties to the earlier one) and
+# `tolerance_hours: 12` is exactly what a noon request needs.  Every one of the
+# 364 GLORYS days from 2024-01-03 to 2024-12-31 resolves to a field valid on
+# that same calendar day.
+#
+# 2024 IS THE HOLDOUT SPLIT.  A forced run trains on holdout data.  That is fine
+# for a plumbing demonstration and it is NOT a skill result -- see
+# docs/05_coupling.md section 5.6, and use configs/dataloader/glorys_forced.yaml,
+# which restricts the sample window to the days the forcing covers and says so
+# in its own header.  Any other split fails immediately, by design: an
+# atmosphere six months stale looks plausible on a plot and quietly ruins a
+# rollout.
+#
+# SEVEN channels, in this order.  Change the list and change n_channels with it
+# -- it is what the embedder reserves room for
+# (`embedder.forcing_ch: ${forcing.n_channels}`), and the two disagreeing is a
+# shape error at the first batch.  `somslpre` (mean sea-level pressure) is in
+# the files but is NOT here: it is NaN over the whole grid in all 520 records,
+# so as a channel it is a constant zero.  XarrayForcing now refuses it at
+# construction rather than let it look like forcing.
+# ---------------------------------------------------------------------------
+n_channels: 7
+source:
+  _target_: oceanarches.dataloaders.forcing.XarrayForcing
+  _convert_: all
+  # Resolved from IFS_FORCING in config.env at instantiation time, so the path
+  # is not baked into a checkpoint's config.yaml.
+  path:
+    _target_: oceanarches.paths.ifs_forcing
+  variables:
+    - sowinu10 # 10 m eastward wind
+    - sowinv10 # 10 m northward wind
+    - sotemair # 2 m air temperature
+    - sod2m # 2 m dewpoint temperature
+    - sowaprec # total precipitation
+    - sosudosw # downward shortwave radiation
+    - sosudolw # downward longwave radiation
+  tolerance_hours: 12.0
+  # Pinned statistics, so two runs normalise the atmosphere identically.
+  # Without this XarrayForcing derives them from a 64-time sample of whatever
+  # archive it is pointed at, which is fine in a notebook and not fine in a
+  # comparison.  Regenerate with `make forcing-stats`.
+  stats_path:
+    _target_: oceanarches.paths.forcing_stats_file

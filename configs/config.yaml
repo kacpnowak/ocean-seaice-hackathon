@@ -1,0 +1,102 @@
+# ---------------------------------------------------------------------------
+# OceanArches root config.
+#
+# Training and inference are always launched through geoarches' own entry point:
+#
+#     .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
+#         module=tiny dataloader=glorys_tiny ++name=my_run
+#
+# It must be `--config-path` with an ABSOLUTE path, not `--config-dir`.
+# `--config-dir` appends to hydra's search path *after* the directory named in
+# `@hydra.main(config_path="configs")`, which for `geoarches.main_hydra` is
+# geoarches' own `configs/`.  Both directories hold a `config.yaml`, so with
+# `--config-dir` the root config below is silently ignored and geoarches' is used
+# instead -- you get its `max_steps: 300000` and `save_step_frequency: 50000`,
+# while `module=tiny` and the other *groups* still come from here (geoarches has
+# no `module/tiny.yaml`).  A run configured that way trains 67x too long and
+# never writes a checkpoint, and nothing warns you.  `--config-path` replaces the
+# `@hydra.main` directory outright, so this file wins.
+# tests/test_configs.py::test_the_documented_command_line_uses_this_root_config
+# runs the real command line and would catch a regression.
+#
+# This file therefore has to expose exactly the keys `main_hydra.py` reads
+# (mode, exp_dir, resume, max_steps, batch_size, log, limit_val_batches,
+# save_step_frequency, ...).  Do not rename them.
+# ---------------------------------------------------------------------------
+defaults:
+  - cluster: local # configs/cluster/*.yaml   -- batch size, precision, workers
+  - dataloader: glorys # configs/dataloader/*.yaml -- which variables, which years
+  - module: base # configs/module/*.yaml     -- the size preset
+  - forcing: none # configs/forcing/*.yaml    -- prescribed atmosphere, if any
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
+  - _self_
+
+hydra:
+  # Startup guards.  hydra runs `on_run_start` after composition and BEFORE the
+  # task function, so this is the one hook that covers `make train-tiny` (which
+  # calls `geoarches.main_hydra` directly), `oceanarches.main_multinode`, the raw
+  # command lines in docs/ and the notebooks, and scripts/*.slurm -- everything
+  # that composes THIS root config.  It refuses a run that would save no
+  # checkpoint, a re-run that would train nothing, and an override that lands on
+  # a key nothing reads; it warns about a missing SLURM allocation and prints
+  # what the run is actually about to do.  See oceanarches/guards.py for why the
+  # guard is here and not in the Makefile.  `--cfg job` does not run callbacks,
+  # so composing the config to look at it is unaffected.
+  callbacks:
+    startup_guard:
+      _target_: oceanarches.guards.StartupGuard
+
+  # geoarches' own config groups stay reachable, so its *metric* groups can be
+  # selected by name for comparison:
+  #
+  #     make train-tiny  ... 'module/metrics=[era5_deterministic]'
+  #
+  # composes and resolves.  Its `module` and `dataloader` groups do not, and that
+  # is by design here: this root config interpolates `${module.max_steps}`,
+  # `${module.save_step_frequency}` and `${module.limit_val_batches}`, none of
+  # which geoarches' own module/*.yaml defines, so `module=archesweather` dies
+  # with `InterpolationKeyError: Interpolation key 'module.max_steps' not found`.
+  # Ours shadow geoarches' wherever the names collide: this directory is the
+  # primary config path (see the note above), so our
+  # configs/module/metrics/glorys_*.yaml are found before geoarches'
+  # module/metrics/era5_*.yaml.
+  searchpath:
+    - pkg://geoarches.configs
+
+# --- logging ---------------------------------------------------------------
+# On by default, and this is NOT only about wandb.  geoarches' `main_hydra` writes
+# `modelstore/<name>/config.yaml` inside `if cfg.log and main_node and ...`, and
+# `geoarches.lightning_modules.base_module.load_module` -- which `make eval` and
+# every notebook that reloads a checkpoint call -- reads exactly that file.  With
+# `log: False` a run trains perfectly, writes its checkpoints, and then cannot be
+# loaded again.
+#
+# It costs nothing: every configs/cluster/*.yaml sets `wandb_mode: offline`, so
+# `main_hydra` builds the WandbLogger with `offline=True` and wandb writes to
+# ./wandblogs without an account, a login, a `wandb` API key or any network
+# access.  Set `wandb_mode: online` (and `entity`) in your cluster config if you
+# actually want the run streamed somewhere.  `log=False` on the command line
+# still turns the whole thing off -- and with it the config file.
+log: True
+entity:
+project: ${module.project}
+name: default
+
+# --- checkpoints -----------------------------------------------------------
+exp_dir: modelstore/${name}
+resume: True # resume from exp_dir if it already holds checkpoints
+save_step_frequency: ${module.save_step_frequency}
+
+# --- run length ------------------------------------------------------------
+# Every preset ships the step budget it was sized for; override on the command
+# line with `max_steps=1000` for a smoke test.
+seed: 0
+max_steps: ${module.max_steps}
+batch_size: ${cluster.batch_size}
+accumulate_grad_batches: 1
+limit_val_batches: ${module.limit_val_batches}
+
+log_freq: 100
+debug: False
+mode: train # "train" or "test"

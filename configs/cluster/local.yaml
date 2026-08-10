@@ -1,0 +1,12 @@
+# A laptop or a login node: no GPU assumed, one worker, one sample at a time.
+# Use it for smoke tests -- `max_steps=5 limit_val_batches=1` -- not for training.
+# Offline on purpose; see configs/cluster/jupiter_1gpu.yaml. The root config ships
+# `log: True` so that `modelstore/<name>/config.yaml` is written, and offline wandb
+# makes that cost nothing -- no account, no key, no network.
+wandb_mode: offline
+use_custom_requeue: False
+
+# 32-bit, because mixed precision on CPU is either unsupported or slower.
+precision: 32-true
+batch_size: 1
+cpus: 2

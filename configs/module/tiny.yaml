@@ -1,0 +1,182 @@
+# ---------------------------------------------------------------------------
+# tiny -- the 30-minute model.  Small enough that everyone in the room has a
+# trained checkpoint before the first coffee break, and bad enough that
+# improving it is worth doing.
+#
+#     make train-tiny
+#
+# All four presets (tiny, small, base, large) are the *same architecture*: an
+# ArchesWeather encoder/backbone/decoder.  Two numbers say how big it is --
+# emb_dim (how wide a token is) and depth_multiplier (how many attention blocks)
+# -- but emb_dim does not move alone: backbone.num_heads has to divide it and
+# embedder.out_emb_dim has to be twice it, so scaling means editing four keys
+# (see the table in docs/04_scaling_finetuning.md).  OceanForecastModule refuses
+# to build if they disagree.  The vertical is NOT a scaling axis: every preset
+# loads the same 13
+# depth levels, because geoarches' backbone only works at a latent depth of 8
+# and 13 levels are what produce it.  See DEPTH_PRESETS in
+# oceanarches/dataloaders/variables.py and latent_z_dim in
+# oceanarches/backbones/ocean_embedder.py, which raises if you change it.
+# ---------------------------------------------------------------------------
+project: ocean-sea-ice
+
+# Which of the 14 prepared depth levels to load, as indices.  Copied verbatim
+# from DEPTH_PRESETS["tiny"] in oceanarches/dataloaders/variables.py -- the
+# dropped one is index 12 (1245 m).  tests/test_configs.py fails if the two ever
+# drift apart.  The dataloader reads this through ${module.depth_indices}.
+depth_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+n_depths: 13
+
+# Per-GPU batch size. The cluster configs read it through ${module.batch_size}.
+# Timed twice, with different instruments and different answers -- both are here
+# because the difference is the point:
+#   * scripts/benchmark_step.py (torch allocator, compute only, no metrics):
+#     42.61 GiB peak, 0.322 s/step, 24.8 samples/s. Batch 16 reaches 85.0 GiB for
+#     4% more throughput -- not worth the OOM risk, hence 8.
+#     (configs/cluster/jupiter_1gpu.yaml quotes 24.1 samples/s for the same
+#     preset. Not a contradiction and not a rounding difference: 24.8 is
+#     compute only, 24.1 is the same model measured end to end with the
+#     dataloader in the loop -- the ~3% gap IS the data tax that config is
+#     sizing its worker count against.)
+#   * a real `make train-tiny` (nvidia-smi, whole process): 48.6 GiB peak,
+#     0.41 s/step. The extra 0.09 s/step is the metrics: geoarches recomputes
+#     every train metric on every step, and ACC interpolates a monthly
+#     climatology per sample.
+batch_size: 8
+
+# MEASURED with a stopwatch, not projected: `make train-tiny` on one booster
+# GH200 (bf16-mixed, batch 8, 16 dataloader workers) took **2033 s = 33.9 min**
+# for 4500 steps, so 4500 overshot the 30-minute budget by 13%. The rate that run
+# gives is 0.438 s per step including its share of validation, on top of 62 s of
+# fixed start-up, which puts 4000 steps at 30.2 min. That is where this number
+# comes from; it is a projection from a measured run, so re-time it if you change
+# the metrics, the batch size or the GPU.
+#
+# 4000 steps is 17.5 epochs of the 1825-sample tiny split.
+#
+# save_step_frequency must DIVIDE max_steps, or the final step is never
+# checkpointed (the callback fires on `global_step % save_step_frequency == 0`).
+# 1000 gives four checkpoints, the last of them the finished model.
+max_steps: 4000
+save_step_frequency: 1000
+limit_val_batches: 16
+
+module:
+  # The ocean forecast module: geoarches' ForecastModuleWithCond with ERA5's
+  # assumptions replaced -- a wet-mask-weighted loss on 180 GLORYS latitudes, the
+  # tendency normalisation taken from our own statistics, and a residual
+  # (tendency) prediction.  See oceanarches/lightning_modules/ocean_forecast.py.
+  _target_: oceanarches.lightning_modules.ocean_forecast.OceanForecastModule
+  name: ${name}
+  cond_dim: 256
+  lr: 3e-4
+  betas: [0.9, 0.98]
+  weight_decay: 0.05
+  num_warmup_steps: 150
+  num_training_steps: ${max_steps}
+  # NO use_graphcast_coeffs / use_prev here. Both were vestigial ERA5 keys:
+  # geoarches builds one set of ERA5 loss coefficients from
+  # `use_graphcast_coeffs` and `ocean_forecast.py` deletes them on the next
+  # line, and it stores `self.use_prev` without ever reading it, because our
+  # `forward` overrides its own. Turning either off gave a bit-identical
+  # model. The two keys that really control the previous state are
+  # `embedder.n_concatenated_states` (1 = the network is given it) and the
+  # dataloader's `dataset.load_prev` (True = it is loaded). Change both.
+
+  # Weight the loss by (data_std / delta_std)^2, so each variable is measured
+  # against how much it changes in a day rather than against how much it varies
+  # between the Baltic and the Red Sea.  That puts a one-day persistence forecast
+  # near 1 -- measured, 0.814 on the first 128 samples of tiny_val and 0.844 on
+  # the whole tiny_train split, not exactly 1.0.  See the loss section of
+  # oceanarches/lightning_modules/ocean_forecast.py for why, and always say which
+  # split a baseline was measured on.
+  loss_delta_normalization: True
+  # Which variables this model predicts, and which it only reads.  Comes from the
+  # dataloader so that `dataloader=glorys_seaice` re-wires model, loss and
+  # metrics together and they cannot disagree.
+  component: ${dataloader.component}
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: ${dataloader.dataset.lead_time_hours}
+  # Predict the one-day change and add the input state.  On for the ocean: SST
+  # moves ~0.1 K/day against a ~10 K spatial spread.
+  add_input_state: True
+  # Clamp every field that has a physical bound in variables.py: siconc to
+  # [0, 1], and sithick, mlotst and so to >= 0.
+  clamp_physical_bounds: True
+  # Prescribed external fields (the atmosphere), or null. `forcing=file`
+  # swaps in XarrayForcing over the netCDF in IFS_FORCING.
+  forcing: ${forcing.source}
+
+defaults:
+  - metrics: # read from configs/module/metrics/
+      - glorys_deterministic
+      - glorys_seaice
+
+train:
+  rollout_iterations: 1 # rollout steps the loss is computed on
+  metrics: ${oc.dict.values:module.metrics}
+  metrics_kwargs:
+    rollout_iterations: 1
+    # Label only the handful of variables worth watching every step; the full set
+    # is ~200 scalars through self.log(sync_dist=True) per step.  Inference below
+    # turns it off and scores everything.
+    headline_only: True
+val:
+  rollout_iterations: 1
+  metrics: ${oc.dict.values:module.metrics}
+  metrics_kwargs:
+    rollout_iterations: 1
+    headline_only: True
+inference:
+  rollout_iterations: 10 # a 10-day forecast at 24 h per step
+  metrics: ${module.metrics}
+  metrics_kwargs:
+    rollout_iterations: ${..rollout_iterations}
+    headline_only: False
+
+backbone:
+  # geoarches' backbone, used unchanged.
+  _target_: geoarches.backbones.archesweather.ArchesWeatherCondBackbone
+  # (latent depth, latent lat, latent lon).  60x120 = 180/3 x 360/3.  The 8 is
+  # latent_z_dim(13) = 1 surface token + 7 depth slabs (13 levels pad to 14,
+  # patch of 2), and it is the only value geoarches' backbone accepts.  Note
+  # that 14 levels would give 9, not 8: geoarches pads by a whole patch when the
+  # depth count is already even.  Same for every preset.
+  tensor_size: [8, 60, 120]
+  emb_dim: 96
+  cond_dim: 256
+  num_heads: [3, 6, 6, 3] # 96/3 = 192/6 = 32 features per head
+  window_size: [1, 6, 10] # divides 60x120 and the downsampled 30x60
+  droppath_coeff: 0.2
+  dropout: 0
+  depth_multiplier: 1
+  use_skip: True # -> the decoder sees 2 * emb_dim channels
+  # The two layers that mix the water column. Both hardcode 8 latent levels
+  # inside geoarches, which is exactly why every preset loads 13 depth levels:
+  # 13 -> pad to 14 -> 7 tokens -> 7 + 1 surface = 8. LinVert is a linear layer
+  # over the whole latent column; axis_attn is attention along it. Without them
+  # the depth levels would never talk to each other, because window_size[0] = 1.
+  first_interaction_layer: linear
+  axis_attn: True
+  mlp_layer: swiglu
+  mlp_ratio: 4.0
+
+embedder:
+  _target_: oceanarches.backbones.ocean_embedder.OceanEncodeDecodeLayer
+  # Channel counts come from the dataloader, i.e. from the component: swapping
+  # `dataloader=glorys_seaice` re-wires the model without touching this file.
+  surface_ch_in: ${dataloader.n_surface_in}
+  surface_ch_out: ${dataloader.n_surface_out}
+  level_ch_in: ${dataloader.n_level_in}
+  level_ch_out: ${dataloader.n_level_out}
+  n_depths: ${module.n_depths}
+  emb_dim: 96
+  out_emb_dim: 192 # 2 * emb_dim, because the backbone uses a skip connection
+  patch_size: [2, 3, 3]
+  # External (atmospheric) forcing channels, from configs/forcing/*.yaml.
+  # 0 with the default `forcing=none`; `forcing=file` reserves room for the
+  # prescribed atmosphere.  Component-to-component exchange does NOT come
+  # through here -- sea ice reaching the ocean model is part of the shared
+  # state, routed by oceanarches/lightning_modules/coupled.py.
+  forcing_ch: ${forcing.n_channels}
+  n_concatenated_states: 1 # also feed the state one lead time earlier

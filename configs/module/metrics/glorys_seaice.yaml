@@ -1,0 +1,14 @@
+# ---------------------------------------------------------------------------
+# Sea-ice extent, area and ice-edge error on the 15% concentration contour, per
+# hemisphere, in 10^6 km^2 -- the units the sea-ice literature uses, so the
+# numbers can be read against published ones.
+#
+# A component that does not predict `siconc` (the ocean specialist) reports
+# nothing rather than failing, so this entry is safe in every module preset.
+# ---------------------------------------------------------------------------
+glorys_seaice_metrics:
+  _target_: oceanarches.metrics.seaice_metrics.SeaIceMetrics
+  _convert_: all
+  component: ${dataloader.component}
+  lead_time_hours: ${dataloader.dataset.lead_time_hours}
+  threshold: 0.15

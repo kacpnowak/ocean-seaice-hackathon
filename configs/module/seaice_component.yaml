@@ -1,0 +1,23 @@
+# ---------------------------------------------------------------------------
+# The sea-ice half of a coupled pair.
+#
+#     make train MODULE=seaice_component DATALOADER=glorys_seaice NAME=seaice_tiny
+#
+# The `tiny` architecture again, with the same halved step budget as
+# `ocean_component` so that the pair fits one coffee break (see that file for the
+# measurement it is projected from).
+#
+# The one thing worth knowing about this configuration: it is surface-only on the
+# way out (`n_level_out: 0`).  The embedder builds no level deconvolution, and
+# every prediction is a TensorDict with a `surface` key and nothing else --
+# which is the configuration most easily broken by a careless change, hence
+# tests/test_embedder.py testing it explicitly.  It still *reads* the whole
+# ocean, including the 3-D fields, so the vertical stack is unchanged and the
+# standard 13-level backbone applies.
+# ---------------------------------------------------------------------------
+defaults:
+  - tiny
+  - _self_
+
+max_steps: 2000
+save_step_frequency: 500

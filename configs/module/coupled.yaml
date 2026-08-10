@@ -1,0 +1,99 @@
+# ---------------------------------------------------------------------------
+# A coupled system: N independently trained components, run as one model.
+#
+#     make couple OCEAN=ocean_tiny SEAICE=seaice_tiny
+#
+# which is
+#
+#     .venv/bin/python -m oceanarches.evaluation.run_eval --coupled \
+#         --components ocean=ocean_tiny seaice=seaice_tiny --lead-days 10
+#
+# `run_eval --coupled` composes exactly this file, fills `components` in from the
+# command line, and hands the result to the Task 7 evaluation pipeline, which
+# treats a coupled system like any other model.  Everything below is therefore a
+# real default and not documentation: change `mode` here and `make couple`
+# changes.
+#
+# This preset is NOT trainable.  The components are trained separately -- see
+# configs/module/{ocean,seaice}_component.yaml -- and coupling happens at
+# rollout time, which is the whole point: two models trained on different days
+# by different people can be run together, because what they exchange is an
+# ordinary field on the grid rather than a latent.
+# ---------------------------------------------------------------------------
+project: ocean-sea-ice
+
+# The vertical grid of the shared state.  Every component must have been trained
+# on these levels; CoupledForecastModule refuses a mismatch by name rather than
+# silently misaligning the water column.
+#
+# No `n_depths` here, unlike the four size presets: they need it because their
+# embedder interpolates `${module.n_depths}`, and a coupled system has no
+# embedder of its own -- each component brought its own.  A key here would be
+# read by nothing.
+depth_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+
+# The root config interpolates these three. Nothing trains through this preset,
+# so they are placeholders chosen to make an accidental `make train
+# MODULE=coupled` stop after one step rather than run for hours.
+max_steps: 1
+save_step_frequency: 1
+limit_val_batches: 1
+batch_size: 1
+
+module:
+  _target_: oceanarches.lightning_modules.coupled.CoupledForecastModule
+  _convert_: all # plain dicts and lists, not OmegaConf nodes
+  # No `name: ${name}` either. CoupledForecastModule stores it and nothing --
+  # here, in the evaluation pipeline or in the report -- ever reads it back: a
+  # coupled system is identified by its components, and `run_eval` builds that
+  # name itself in `default_experiment_name`.
+  # {component name: run name under modelstore/, or a path to a run directory},
+  # e.g. `{ocean: ocean_tiny, seaice: seaice_tiny}`.  Each key must be the name
+  # of the COMPONENTS entry in oceanarches/dataloaders/variables.py that the
+  # checkpoint was trained as, and CoupledForecastModule checks that it is.
+  # `???` is hydra's "mandatory value": composing without filling this in is an
+  # error, rather than a coupled system quietly built out of nothing.  It is one
+  # value rather than a dict of stubs so that a system of one component --
+  # `--components seaice=<run>`, the ablation arm -- needs no deletions.
+  components: ???
+  # sequential: components run in `order` and a later one sees the fields an
+  # earlier one has already updated (the ice responds to today's ocean).
+  # parallel: everyone sees time t and the outputs are merged afterwards, which
+  # is what you get by running two models side by side.
+  mode: sequential
+  order: [ocean, seaice]
+  # What happens to shared-state channels no component predicts -- there are none
+  # for ocean+seaice, which between them own everything.  `persistence` holds them
+  # at their initial value (a genuinely free-running forecast); `ground_truth`
+  # reads them from the dataset at each valid time (a perfect-forcing experiment,
+  # which is how the sea-ice component is scored against a known ocean).
+  unpredicted_forcing: persistence
+  # Which COMPONENTS entry the coupled system as a whole is equivalent to.
+  # ocean + seaice = full. Derived from the parts when left null.
+  component: ${dataloader.component}
+
+defaults:
+  - metrics: # read from configs/module/metrics/
+      - glorys_deterministic
+      - glorys_seaice
+
+# Only `inference` is used (the evaluation pipeline builds its metrics from it);
+# train and val are here so that a coupled config composes like every other one.
+train:
+  rollout_iterations: 1
+  metrics: ${oc.dict.values:module.metrics}
+  metrics_kwargs:
+    rollout_iterations: 1
+    headline_only: True
+val:
+  rollout_iterations: 1
+  metrics: ${oc.dict.values:module.metrics}
+  metrics_kwargs:
+    rollout_iterations: 1
+    headline_only: True
+inference:
+  rollout_iterations: 10 # a 10-day coupled forecast at 24 h per step
+  metrics: ${module.metrics}
+  metrics_kwargs:
+    rollout_iterations: ${..rollout_iterations}
+    headline_only: False

@@ -1,0 +1,16 @@
+# Dependency overrides applied when installing this project.
+#
+# 1) geoarches pins `torchvision >=0.20.1,<0.21` -- but it never imports torchvision
+#    anywhere in the package (verified by grepping every .py file in the repo).
+#    Honouring that pin would drag torch back to 2.5.x, for which there is no
+#    aarch64 + CUDA wheel pairing that works on GH200.  Override it.
+torchvision>=0.24
+
+# 2) geoarches pins `tensordict >=0.6.2,<0.7` but tensordict only started publishing
+#    aarch64 wheels at 0.8.0, so the pinned version cannot be installed on GH200 at all.
+#    Let the resolver pick the newest tensordict that pairs with our torch.
+tensordict>=0.9
+
+# 3) torch 2.9.1 requests nvidia-nccl-cu12==2.27.5.  On JUPITER we need a newer NCCL;
+#    moving *up* is the ABI-safe direction.
+nvidia-nccl-cu12>=2.29; sys_platform == 'linux'

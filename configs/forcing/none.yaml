@@ -1,0 +1,17 @@
+# ---------------------------------------------------------------------------
+# No external forcing.  The default, and the path everything must support.
+#
+# "External" means outside the GLORYS state -- in practice the prescribed
+# atmosphere.  It is NOT the exchange between two coupled components: sea ice
+# reaching the ocean model is part of the shared state and is routed by
+# oceanarches/lightning_modules/coupled.py, not by a ForcingSource.
+#
+# `source: null` rather than `NoForcing()` because it is the cheapest possible
+# statement of "there is nothing to fetch" -- the module returns before it builds
+# anything.  Both spellings work: `OceanForecastModule.external_forcing` also
+# handles a source whose `get` returns None, which is exactly what `NoForcing` is
+# defined to do, so writing `_target_: ...forcing.NoForcing` here is a valid
+# choice and not a trap.  `n_channels: 0` is what the embedder reserves.
+# ---------------------------------------------------------------------------
+n_channels: 0
+source: null

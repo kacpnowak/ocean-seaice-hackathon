@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------------------
+# The ocean component of the coupled pair.
+#
+# Predicts the ocean (zos, mlotst, bottomT, thetao, so, uo, vo) and *reads*
+# the sea-ice state (siconc, sithick, usi, vsi) without predicting it: ice
+# insulates the ocean from the atmosphere and freshens it when it melts, so an
+# ocean model that cannot see the ice is missing a boundary condition.
+#
+# Channel order is what makes this couplable: the four sea-ice channels sit at
+# the end of the surface input, so at coupled-rollout time (Task 8) the sea-ice
+# model's prediction is written into exactly those slots.
+# ---------------------------------------------------------------------------
+component: ocean
+
+n_surface_in: 7 # 3 predicted + 4 read from the ice
+n_surface_out: 3
+n_level_in: 4
+n_level_out: 4
+
+dataset:
+  _target_: oceanarches.dataloaders.glorys.GlorysForecast
+  _convert_: all
+  domain: train
+  variables:
+    # prognostic first, then forcing
+    surface: [zos, mlotst, bottomT, siconc, sithick, usi, vsi]
+    level: [thetao, so, uo, vo]
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: 24
+  timedelta_hours: 24
+  multistep: ${oc.select:module.train.rollout_iterations,1}
+  load_prev: True
+  norm_scheme: glorys
+
+validation_args:
+  domain: val
+  multistep: ${oc.select:module.val.rollout_iterations,1}
+
+test_args:
+  domain: test
+  multistep: ${oc.select:module.inference.rollout_iterations,1}

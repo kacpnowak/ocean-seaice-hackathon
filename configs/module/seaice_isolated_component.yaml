@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Sea ice that has never seen the ocean -- the ablation arm of the coupling
+# experiment.
+#
+#     make train MODULE=seaice_isolated_component DATALOADER=glorys_seaice_isolated \
+#         NAME=seaice_isolated_tiny
+#
+# Same budget and same width as `seaice_component`, so the two are comparable:
+# the *only* difference between them is that this one reads four channels and
+# that one reads eleven.  Anything else that differed would confound the answer.
+#
+# There is no depth axis here at all, and that is what the three overrides below
+# are for.  With `n_level_in: 0` the embedder builds no 3-D convolution and the
+# latent vertical collapses from 8 (1 surface token + 7 depth slabs) to 1 (the
+# surface token alone).  geoarches' ArchesWeather backbone writes that 8 out as a
+# literal in three places, so at any other latent depth its two cross-depth
+# layers have to be switched off:
+#
+#   tensor_size[0]: 1        the latent vertical is one token
+#   first_interaction_layer  LinVert mixes the latent column -- there is none
+#   axis_attn                axial attention along depth -- likewise
+#
+# and the embedder is built with `allow_any_z_dim: true` to say out loud that
+# this is deliberate rather than a mis-set depth preset.  Nothing is lost by
+# turning them off: a model with one latent level has no water column to mix.
+# `ArchesWeatherCondBackbone.forward` still reshapes its output to a hardcoded 8
+# latent levels; `OceanEncodeDecodeLayer._unpack_backbone_output` reshapes it
+# back, exactly, before decoding.
+# ---------------------------------------------------------------------------
+defaults:
+  - tiny
+  - _self_
+
+max_steps: 2000
+save_step_frequency: 500
+
+backbone:
+  tensor_size: [1, 60, 120]
+  first_interaction_layer: null
+  axis_attn: False
+
+embedder:
+  n_depths: 0
+  allow_any_z_dim: True

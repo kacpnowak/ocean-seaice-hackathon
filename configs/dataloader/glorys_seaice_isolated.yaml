@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# The ablation: sea ice with no knowledge of the ocean at all.
+#
+# Same four prognostic fields as `glorys_seaice`, and nothing else -- no zos, no
+# thetao, no 3-D input of any kind.  The difference between a model trained on
+# this and one trained on `glorys_seaice` is the honest answer to "how much does
+# the ice forecast actually get from the ocean state?", because the two differ
+# in exactly one thing: what the model is allowed to read.
+#
+# This is the only shipped configuration with `n_level_in: 0`, which means no
+# depth axis at all: the embedder builds no 3-D convolution, the latent vertical
+# collapses to the single surface token, and the backbone has to be told so.
+# Pair it with `module=seaice_isolated_component`, which is the preset that does
+# that; `module=tiny` will refuse to build, loudly, because 0 depth levels give a
+# latent depth of 1 and geoarches' backbone hardcodes 8.
+# ---------------------------------------------------------------------------
+component: seaice_isolated
+
+n_surface_in: 4 # 4 predicted, nothing read
+n_surface_out: 4
+n_level_in: 0
+n_level_out: 0
+
+dataset:
+  _target_: oceanarches.dataloaders.glorys.GlorysForecast
+  _convert_: all
+  domain: train
+  variables:
+    surface: [siconc, sithick, usi, vsi]
+    # Deliberately empty. GlorysDataset drops empty groups, so the sample has no
+    # `level` key and every downstream `if "level" in state` takes the short path.
+    level: []
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: 24
+  timedelta_hours: 24
+  multistep: ${oc.select:module.train.rollout_iterations,1}
+  load_prev: True
+  norm_scheme: glorys
+
+validation_args:
+  domain: val
+  multistep: ${oc.select:module.val.rollout_iterations,1}
+
+test_args:
+  domain: test
+  multistep: ${oc.select:module.inference.rollout_iterations,1}

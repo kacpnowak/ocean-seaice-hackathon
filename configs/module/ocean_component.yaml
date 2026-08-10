@@ -1,0 +1,26 @@
+# ---------------------------------------------------------------------------
+# The ocean half of a coupled pair.
+#
+#     make train MODULE=ocean_component DATALOADER=glorys_ocean NAME=ocean_tiny
+#
+# Architecture, optimiser, metrics and depth levels are the `tiny` preset's,
+# unchanged -- the only thing that makes this an ocean model is the dataloader it
+# is paired with, because `module.component`, the embedder's channel counts and
+# the metrics all read `${dataloader.component}`.  Pair it with anything else and
+# it is not an ocean model, whatever the file is called; the channel counts
+# follow the dataloader and `OceanForecastModule._check_embedder` will tell you
+# so at construction time if they disagree.
+#
+# What IS different from `tiny`: the step budget.  A coupled system is two models,
+# and two of these fit in the ~30-minute coffee-break budget that `tiny` spends on
+# one.  Measured basis: `make train-tiny` ran 4500 steps in 2033 s on one booster
+# GH200, i.e. 0.438 s/step plus ~62 s of start-up, so 2000 steps is about 15.7
+# min. That is a projection from a measured run, not a measurement of this
+# config -- re-time it if you change the batch size or the GPU.
+# ---------------------------------------------------------------------------
+defaults:
+  - tiny
+  - _self_
+
+max_steps: 2000
+save_step_frequency: 500

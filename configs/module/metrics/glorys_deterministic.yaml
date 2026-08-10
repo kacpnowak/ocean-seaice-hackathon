@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# Land-aware RMSE / MAE / bias / ACC on the GLORYS state.
+#
+# Replaces geoarches' `era5_deterministic`, which scores 4 named ERA5 surface
+# variables on 13 pressure levels over a grid with no land in it.
+#
+# `component` decides which variables are scored: a metric always follows the
+# model's *prognostic* variables, so `dataloader=glorys_seaice` scores the four
+# ice fields and nothing else, with no edit here.
+# ---------------------------------------------------------------------------
+glorys_deterministic_metrics:
+  _target_: oceanarches.metrics.masked_metrics.MaskedDeterministicMetrics
+  _convert_: all # plain lists, not OmegaConf nodes
+  component: ${dataloader.component}
+  # The same 13 of 14 prepared levels the dataloader loads. If these two ever
+  # disagree the model is scored against the climatology of the wrong depth.
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: ${dataloader.dataset.lead_time_hours}
+  # ACC against oceanarches/stats/glorys_1deg_climatology.nc, interpolated to the
+  # forecast's valid day. Costs ~180 MB of device memory per metric instance
+  # (train, val and inference each build one); set False to save it.
+  compute_acc: True

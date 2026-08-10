@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# The 30-minute dataloader: same variables as `glorys`, five years instead of
+# twenty-six.
+#
+# train = tiny_train (2014-2018, 1825 samples), val = tiny_val (2019, 364).
+# The point is not only that there is less data: the filename filter opens 7
+# yearly files instead of 33, so the first batch arrives in seconds and the
+# page cache actually holds the working set.
+#
+# Use it with `module=tiny`:
+#     make train-tiny            # or
+#     python -m geoarches.main_hydra --config-path $PWD/configs \
+#         module=tiny dataloader=glorys_tiny cluster=jupiter_1gpu ++name=my_run
+# ---------------------------------------------------------------------------
+component: full
+
+n_surface_in: 7
+n_surface_out: 7
+n_level_in: 4
+n_level_out: 4
+
+dataset:
+  _target_: oceanarches.dataloaders.glorys.GlorysForecast
+  _convert_: all
+  domain: tiny_train
+  variables:
+    surface: [zos, mlotst, bottomT, siconc, sithick, usi, vsi]
+    level: [thetao, so, uo, vo]
+  depth_indices: ${module.depth_indices}
+  lead_time_hours: 24
+  timedelta_hours: 24
+  multistep: ${oc.select:module.train.rollout_iterations,1}
+  load_prev: True
+  norm_scheme: glorys
+
+validation_args:
+  domain: tiny_val
+  multistep: ${oc.select:module.val.rollout_iterations,1}
+
+# Scoring still happens on the real test split -- a 30-minute model is allowed
+# to be bad, it is not allowed to be scored on its own training years.
+test_args:
+  domain: test
+  multistep: ${oc.select:module.inference.rollout_iterations,1}

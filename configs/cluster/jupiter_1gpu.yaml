@@ -1,0 +1,52 @@
+# One GH200 on a JUPITER booster node.
+#
+#   srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
+#        --cpus-per-task=16 --time=01:00:00 --pty bash
+#   export CUDA_VISIBLE_DEVICES=0
+#   make train-tiny NAME=my_run
+#
+# BOTH of those flags matter and neither is optional.
+#
+# `--ntasks=1`: without it, `--cpus-per-task=N` launches N concurrent copies of
+# your script.  That has already corrupted a measurement and half-mutated a
+# source file in this project.
+#
+# `CUDA_VISIBLE_DEVICES=0`: the booster partition allocates WHOLE NODES, so a
+# `--gres=gpu:1` request comes back with all four cards whatever you ask for.
+# Measured on a real job that requested one GPU and sixteen cores:
+#
+#   $ sacct -j 1282871 --format=JobID,AllocTRES%80,ReqTRES%60
+#   1282871  billing=288,cpu=288,gres/gpu:gh200=4,gres/gpu=4,node=1  billing=16,cpu=16,gres/gpu=1,...
+#
+# Lightning's `devices="auto"` then picks all four and shards the data four ways
+# inside your single process: 58 training batches per epoch instead of 229, i.e.
+# a quarter of the dataset, with a loss curve that looks completely normal.
+# There is no core count that avoids this.  Check the batch count in epoch 0.
+#
+# A booster node is 4x GH200 (96 GB HBM each), 288 cores and 878 GB RAM, i.e.
+# 72 cores per GPU.  That does *not* mean 72 dataloader workers: see `cpus`.
+# wandb stays OFFLINE, and the root config ships `log: True` on purpose: geoarches
+# writes `modelstore/<name>/config.yaml` -- the file `load_module` needs to reload
+# a run -- only when `log` is on. Offline means it writes to ./wandblogs and never
+# asks for an account, a key or a network. Set `online` here if you want it
+# streamed, and fill in `entity` in configs/config.yaml.
+wandb_mode: offline
+use_custom_requeue: False
+
+# bf16 on Hopper. Same speed as fp16 with none of the loss-scaling drama, and
+# the normalised ocean state has a wide dynamic range (deep velocities are tiny).
+precision: bf16-mixed
+
+# Per-GPU batch. It comes from the size preset, because 96 GB fits 8 samples of
+# `tiny` and 1 of `large` -- one number here could only be wrong for three of
+# the four. Each configs/module/*.yaml records the peak memory it was measured
+# at. Override for a one-off with `batch_size=4` on the command line.
+batch_size: ${module.batch_size}
+
+# Dataloader workers. 72 cores are available per GPU; 72 workers would be silly.
+# The greediest preset is `tiny` at 24.1 samples/s, and the dataloader delivers
+# 53 samples/s from the full 92 GB archive on 4 workers -- measured end to end,
+# 0.332 s/step against 0.322 s of pure compute, a 3% data tax. 16 workers is
+# several times what the measurement needs, which is the headroom for a cold
+# page cache: at 2 workers on a cold cache the same step took 2.4 s.
+cpus: 16
