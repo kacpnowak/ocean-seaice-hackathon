@@ -54,7 +54,7 @@ make stats
 #    YOUR OWN modelstore/, with the shipped runs linked in one by one
 mkdir -p modelstore
 SHARED=/e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice/modelstore
-for run in task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
+for run in large_pretrained task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
     ln -s $SHARED/$run modelstore/$run
 done
 
@@ -94,10 +94,15 @@ NAME=task6_tiny` used to exit 0 having trained and saved nothing; it is now
 refused at startup, and the message offers a fresh name, a longer `++max_steps`
 or `make eval`.
 
-The three runs the documents use by name are `task6_tiny` (docs/04, docs/06,
-docs/07, the cheatsheet), and `ocean_tiny` + `seaice_tiny` + `seaice_isolated_tiny`
-(docs/05, docs/07). Without step 3, every `[GOOD FIRST]` experiment that needs no
-training will stop at "no such run".
+The runs the documents use by name are `large_pretrained` -- **the pre-trained
+model you fine-tune** (docs/04) -- `task6_tiny` (docs/04, docs/06, docs/07, the
+cheatsheet), and `ocean_tiny` + `seaice_tiny` + `seaice_isolated_tiny` (docs/05,
+docs/07). Without step 3, every `[GOOD FIRST]` experiment that needs no training
+will stop at "no such run".
+
+`large_pretrained` is 78 GB and the other four are under 1 GB each. **Linking
+costs you none of it** -- a symlink is a symlink, the bytes stay in the shared
+store, and you only ever read them.
 
 The data itself is the one thing you do not have to rebuild: `config.env` already
 points `GLORYS_PREPPED` at `nowak2`'s prepared 92 GB, which is read-only to you,

@@ -139,7 +139,9 @@ def forcing_stats_file() -> Path:
 # So the deletion goes through one function that refuses anything which is not
 # the caller's own directory, and reports what it did.
 #: The runs docs/01 tells you to link in from the shared store.  Never ours to delete.
-SHIPPED_RUNS = frozenset({"task6_tiny", "ocean_tiny", "seaice_tiny", "seaice_isolated_tiny"})
+SHIPPED_RUNS = frozenset(
+    {"task6_tiny", "ocean_tiny", "seaice_tiny", "seaice_isolated_tiny", "large_pretrained"}
+)
 
 
 class UnsafeRunDirectory(RuntimeError):

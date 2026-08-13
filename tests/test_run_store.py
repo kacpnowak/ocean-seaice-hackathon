@@ -20,6 +20,7 @@ a fake shared store -- never against the real one -- and both must be refused
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -208,3 +209,47 @@ def test_notebook_02_says_that_the_rollouts_do_not_need_the_training_run():
     markdown = "\n".join("".join(c["source"]) for c in cells if c["cell_type"] == "markdown")
     assert "do not depend on this training run" in markdown
     assert "task6_tiny" in markdown
+
+
+# ---------------------------------------------------------------------------
+# The four places a newly shipped run has to be named, and the two a test can see
+# ---------------------------------------------------------------------------
+def test_the_documented_symlink_loop_ships_exactly_the_protected_runs():
+    """`SHIPPED_RUNS` and docs/01 section 1.1 are the same list, or the kit lies.
+
+    Adding a run to the shared store means naming it in four places (see
+    docs/TUTORS.md section 2): the store itself, `SHIPPED_RUNS`, the `for run in
+    ...` loop participants copy out of docs/01, and a release. Miss the loop and
+    nobody links the new run in -- the checkpoint is there and every document
+    that loads it by name fails. Miss `SHIPPED_RUNS` and the kit will let a
+    participant delete it out of the store shared with the room, which is the
+    failure the rest of this file exists to prevent.
+
+    Nothing tied the two together, so a run added to one could sit indefinitely
+    missing from the other.
+
+    MUTANT: dropping any name from either list fails this.
+    """
+    text = (REPO_ROOT / "docs" / "01_setup.md").read_text()
+    match = re.search(r"^for run in (.+?); do$", text, re.M)
+    assert match is not None, (
+        "docs/01 section 1.1 no longer has the `for run in ...; do` loop that "
+        "participants copy to link the shipped runs in"
+    )
+    documented = set(match.group(1).split())
+    protected = set(paths.SHIPPED_RUNS)
+    assert documented == protected, (
+        f"docs/01 tells participants to link {sorted(documented)}, but "
+        f"paths.SHIPPED_RUNS protects {sorted(protected)}.\n"
+        f"  in the docs but unprotected: {sorted(documented - protected) or 'none'}\n"
+        f"  protected but undocumented: {sorted(protected - documented) or 'none'}"
+    )
+
+
+def test_every_shipped_run_is_really_in_the_store():
+    """A name in both lists and nothing on disk is the same failure, one step later."""
+    store = paths.modelstore()
+    if not store.is_dir():  # a clone that has not linked anything in yet
+        pytest.skip(f"{store} does not exist in this checkout")
+    missing = [name for name in sorted(paths.SHIPPED_RUNS) if not (store / name).exists()]
+    assert not missing, f"{store} is missing shipped runs: {missing}"

@@ -383,9 +383,13 @@ Two things to know about resuming:
   that directory either way.
 * **One name, one running job.** The first process to get past the startup checks
   writes `modelstore/<name>/.training.lock`; a second launch of the same name is
-  refused and prints the host, pid and SLURM job id holding it. A lock left by a
-  crashed job on this host is taken over automatically; from another host, delete
-  it (`rm modelstore/<name>/.training.lock`) once you are sure the job is gone.
+  refused and prints the host, pid and SLURM job id holding it -- and how it
+  decided the holder is still alive. A lock is taken over automatically when its
+  SLURM job has left the queue (which is what a job killed at its wall clock
+  leaves behind, so an ordinary relaunch is never blocked by one), or when its pid
+  on this host is gone. Only where neither is knowable -- another host, no SLURM
+  -- does it fall back to believing the lock for a day, and there you delete it
+  (`rm modelstore/<name>/.training.lock`) once you are sure the job is gone.
 * The learning-rate schedule was built for the *original* `max_steps`. Extend a
   finished run and you continue at the cosine schedule's floor.
 
@@ -432,12 +436,30 @@ Everything above is a command line you type inside an `srun`. For the two long
 jobs there are batch scripts, so you can submit them and go away.
 
 ```bash
-# what participants use: fine-tune an existing checkpoint on one GPU
-sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune scripts/finetune.slurm
+# THE MAIN PATH: fine-tune the pre-trained `large` model on one GPU.
+# MODULE=large is not optional -- it must be the preset FROM was trained with.
+sbatch --export=ALL,FROM=large_pretrained,MODULE=large,NAME=my_finetune \
+    scripts/finetune.slurm
 
-# what the ORGANISERS run before the hackathon: `large` on 4x GH200
+# the same thing against the 31-minute model, if you want a quick loop first
+sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune_tiny scripts/finetune.slurm
+
+# what the ORGANISERS ran before the hackathon: `large` on 4 nodes x 4 GH200
 sbatch scripts/pretrain_large.slurm
 ```
+
+**`large_pretrained` is the checkpoint this challenge is built around.** It is
+75 000 steps of `module=large` at `lr 1e-4`, trained on 1993--2018 across 16
+GH200s, and on the held-out test years it beats persistence on *every* variable
+at *every* lead time out to 10 days -- 36% better on day-1 SST, 53% on sea
+surface height, 35% on sea-ice concentration -- and stays better than
+climatology for 23 days on SST and 29 on sea-ice concentration.
+[docs/06](06_evaluation.md) explains what those numbers mean and how to produce
+them for your own model; `evalstore/large_pretrained/report.md` in the shared
+store is its full scorecard.
+
+Fine-tune it rather than training from scratch: you have a day, and the
+pre-training was 18 hours on 16 GPUs.
 
 [`scripts/finetune.slurm`](../scripts/finetune.slurm) is (b) above with the
 mistakes made impossible. Every knob is an environment variable with a default

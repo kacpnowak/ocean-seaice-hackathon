@@ -80,6 +80,7 @@ dataloader is required to order channels prognostic-first, which
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Sequence
 
@@ -90,13 +91,20 @@ import torch.utils.checkpoint as gradient_checkpoint
 from geoarches.lightning_modules.forecast import ForecastModuleWithCond
 from tensordict.tensordict import TensorDict
 
-from .. import paths
+from .. import guards, paths
 from ..dataloaders import variables as V
 from ..dataloaders.forcing import ForcingSource
 from ..dataloaders.masks import Masks, load_masks, state_mask
 from ..metrics.masked_metrics import compute_lat_weights_glorys, ocean_area_weights
 
-__all__ = ["OceanForecastModule", "compute_lat_weights_glorys", "plain_betas"]
+__all__ = [
+    "DivergenceGuard",
+    "LossDiverged",
+    "OceanForecastModule",
+    "compute_lat_weights_glorys",
+    "divergence_refusal",
+    "plain_betas",
+]
 
 
 def _select_statistics(
@@ -167,6 +175,197 @@ def plain_betas(kwargs: dict) -> dict:
     return {**kwargs, "betas": tuple(float(beta) for beta in kwargs["betas"])}
 
 
+# ---------------------------------------------------------------------------
+# The divergence guard
+# ---------------------------------------------------------------------------
+#: How far above its own best running mean the loss has to be to count as an
+#: explosion rather than a bad batch.
+DIVERGENCE_FACTOR = 100.0
+#: How many consecutive training steps it has to stay there before the abort.
+DIVERGENCE_PATIENCE = 50
+#: Steps observed before the guard is armed at all.
+DIVERGENCE_WARMUP_STEPS = 100
+#: Momentum of the running mean: a time constant of about 100 steps.
+DIVERGENCE_EMA_MOMENTUM = 0.99
+
+
+class LossDiverged(RuntimeError):
+    """Training was stopped because the loss had blown up past recovering."""
+
+
+class DivergenceGuard:
+    """Decide, from the loss alone, whether a run has stopped training.
+
+    Why this exists, measured
+    -------------------------
+    The 16-GPU ``large`` pre-training run diverged between step 15000 and 20000
+    and then trained for **eight more hours** on 16 GH200s producing garbage.
+    Nothing stopped it and nothing said anything.  Read off its own checkpoints,
+    with a forward pass on real validation data::
+
+        step     loss      output std (target ~0.69)
+         5000    5.13      0.700
+        10000   24.70      0.769     <- a spike, and it RECOVERED
+        15000    1.96      0.729
+        20000   1.05e8     652       <- gone; 8 h of GPU time followed
+
+    The 10000-step spike is the whole difficulty: a guard that aborted on any
+    single increase, or on any 5x rise, would have killed a run that went on to
+    reach 1.96.
+
+    The rule
+    --------
+    * a **non-finite** loss (NaN or inf) aborts immediately, with no tolerance:
+      there is no recovering from it and no reason to wait;
+    * otherwise the loss is compared against a *reference*: the **smallest**
+      exponential moving average of the loss seen so far.  It ratchets down
+      only.  A plain EMA would not do -- a blow-up drags an EMA up with it, and
+      an exponential blow-up (this one covered 7.7 orders of magnitude in 5000
+      steps, i.e. about 1.004x per step) outruns a 100-step EMA by only ~1.4x,
+      so a run could explode entirely without ever exceeding a tracking
+      reference.  A minimum cannot be dragged anywhere;
+    * the abort needs ``loss > factor * reference`` on ``patience``
+      **consecutive** steps.  One bad batch, or a spike lasting a few dozen
+      steps, resets the counter.
+
+    Why ``factor=100`` and ``patience=50`` separate the two measured cases
+    ---------------------------------------------------------------------
+    At step 10000 the reference is around 3-5 (the run had already come down to
+    5.13 at step 5000), so the 24.70 spike is a **~5x** excursion.  At step
+    20000 the reference is about 1.9 (the best smoothed loss, reached around
+    step 15000), so 1.05e8 is a **~5e7** excursion.  The two are seven orders of
+    magnitude apart, so any threshold in between works and the choice is where
+    to spend the margin: 100x sits **20x above the survivable spike** and
+    **500000x below the divergence**.  ``patience=50`` then costs at most 50
+    steps (~40 s on that run) and buys immunity to any transient shorter than
+    that -- and a model whose output std is 652 against a target of 0.69, as
+    this one's was, does not come back inside 50 steps.
+
+    Early training
+    --------------
+    The reference is a *minimum*, so a loss that legitimately starts high and
+    falls fast -- this run began near 935 and reached 5.13 by step 5000 -- can
+    never exceed it: the reference is always at or below the current smoothed
+    loss.  ``warmup_steps`` observations are required on top of that, so a first
+    step that happens to draw an unusually easy batch cannot set a reference the
+    rest of the run is measured against.
+
+    Counting is per guard instance, i.e. per process and from the start of
+    ``fit``; a resumed run starts its warm-up again, which is right -- the
+    reference belongs to the loss curve this process has actually seen.
+    """
+
+    def __init__(
+        self,
+        factor: float = DIVERGENCE_FACTOR,
+        patience: int = DIVERGENCE_PATIENCE,
+        warmup_steps: int = DIVERGENCE_WARMUP_STEPS,
+        ema_momentum: float = DIVERGENCE_EMA_MOMENTUM,
+    ):
+        self.factor = float(factor)
+        self.patience = int(patience)
+        self.warmup_steps = int(warmup_steps)
+        self.ema_momentum = float(ema_momentum)
+        #: Smallest smoothed loss seen so far -- the reference, or None.
+        self.reference: float | None = None
+        self.mean: float | None = None
+        self.observed = 0
+        self.consecutive = 0
+
+    def update(self, step: int, loss: float) -> str | None:
+        """Record one training loss and return why to abort, or ``None``.
+
+        The return value is a sentence for :func:`divergence_refusal`, never an
+        exception: deciding is this class's job, stopping the run is the
+        module's.
+        """
+        value = float(loss)
+        if not math.isfinite(value):
+            what = "NaN" if math.isnan(value) else f"{value}"
+            return (
+                f"the loss is {what}, which no learning rate schedule recovers from "
+                f"-- aborting on the first occurrence, at step {step}"
+            )
+
+        self.observed += 1
+        self.mean = value if self.mean is None else _ema(self.mean, value, self.ema_momentum)
+        if self.reference is None or self.mean < self.reference:
+            self.reference = self.mean
+
+        if self.observed <= self.warmup_steps or not self.reference > 0:
+            self.consecutive = 0
+            return None
+
+        if value <= self.factor * self.reference:
+            self.consecutive = 0
+            return None
+
+        self.consecutive += 1
+        if self.consecutive < self.patience:
+            return None
+        return (
+            f"the loss has been more than {self.factor:g}x its own best running mean "
+            f"({self.reference:.3g}) for {self.consecutive} consecutive steps, ending at "
+            f"{value:.3g} on step {step}; that is an explosion, not a spike"
+        )
+
+
+def _ema(previous: float, value: float, momentum: float) -> float:
+    return momentum * previous + (1.0 - momentum) * value
+
+
+def divergence_refusal(
+    step: int,
+    loss: float,
+    reason: str,
+    checkpoint: Path | None = None,
+    lr: float | None = None,
+) -> str:
+    """The message the abort prints and carries.  Names the way back, not just the fault.
+
+    Four things have to be in here, because the run that motivated it produced
+    none of them: which step, what the loss was, which checkpoint is still good,
+    and the exact override that lowers the learning rate for the restart.
+    """
+    where = str(checkpoint) if checkpoint is not None else "NONE -- this run has saved nothing yet"
+    if lr and math.isfinite(lr):
+        lower = f"{lr / 2:g}"
+        note = f"half of the {lr:g} this run used; a third is the other usual step"
+    else:
+        lower = "<half of what this run used>"
+        note = "half of what this run used is the usual first try"
+    override = f"++module.module.lr={lower}"
+    return (
+        f"TRAINING DIVERGED at step {step}: loss = {loss:.6g}.\n"
+        "\n"
+        f"    {reason}.\n"
+        "\n"
+        "    This run is finished. The weights are already ruined, and every further\n"
+        "    step spends GPU hours producing a model nobody can use: the 16-GPU\n"
+        "    `large` pre-training run this guard comes from ran EIGHT HOURS past its\n"
+        "    own divergence before anybody looked.\n"
+        "\n"
+        f"    Last checkpoint written:\n      {where}\n"
+        "\n"
+        "    What to do:\n"
+        "      1. Resume from a checkpoint written BEFORE the loss took off. geoarches\n"
+        "         resumes from the NEWEST .ckpt in that directory, so move or delete\n"
+        "         any checkpoint saved after the blow-up first, or it will load the\n"
+        "         broken weights straight back in.\n"
+        f"      2. Lower the learning rate:  {override}\n"
+        f"         ({note}.)\n"
+        "         Add it to whatever launched this run:\n"
+        f'           make train-tiny NAME=<run> HYDRA_ARGS="{override}"\n'
+        f'           sbatch --export=ALL,EXTRA_HYDRA_ARGS="{override}" scripts/finetune.slurm\n'
+        "           ...or the override list in notebooks 02 and 03.\n"
+        "\n"
+        "    If this really was a spike worth training through, the guard is\n"
+        "    configurable: ++module.module.divergence_guard=False turns it off, and\n"
+        "    ++module.module.divergence_factor= / ++module.module.divergence_patience=\n"
+        "    move the threshold rather than removing it.\n"
+    )
+
+
 class OceanForecastModule(ForecastModuleWithCond):
     """Deterministic GLORYS forecast module.
 
@@ -199,6 +398,12 @@ class OceanForecastModule(ForecastModuleWithCond):
         forcing: optional :class:`~oceanarches.dataloaders.forcing.ForcingSource`
             for prescribed external fields.  ``None`` (no forcing) is the
             default and the best-tested path.
+        divergence_guard: abort the run when the training loss blows up, instead
+            of training on for hours producing garbage.  Default True; turn it
+            off with ``++module.module.divergence_guard=False``.  See
+            :class:`DivergenceGuard` for the rule and for where its constants
+            come from, and ``divergence_factor`` / ``divergence_patience`` /
+            ``divergence_warmup_steps`` to move them.
         stats_path, masks_path: overrides, for tests.
         kwargs: passed to geoarches (``lr``, ``betas``, ``weight_decay``,
             ``num_warmup_steps``, ``num_training_steps``, ``cond_dim``,
@@ -217,6 +422,10 @@ class OceanForecastModule(ForecastModuleWithCond):
         multistep_curriculum: bool = False,
         lead_time_hours: int = 24,
         forcing: ForcingSource | None = None,
+        divergence_guard: bool = True,
+        divergence_factor: float = DIVERGENCE_FACTOR,
+        divergence_patience: int = DIVERGENCE_PATIENCE,
+        divergence_warmup_steps: int = DIVERGENCE_WARMUP_STEPS,
         stats_path: str | Path | None = None,
         masks_path: str | Path | None = None,
         **kwargs,
@@ -249,6 +458,16 @@ class OceanForecastModule(ForecastModuleWithCond):
         self.loss_delta_normalization = bool(loss_delta_normalization)
         self.multistep_curriculum = bool(multistep_curriculum)
         self.forcing_source = forcing
+        #: A :class:`DivergenceGuard`, or None when the guard is turned off.
+        self.divergence_guard = (
+            DivergenceGuard(
+                factor=divergence_factor,
+                patience=divergence_patience,
+                warmup_steps=divergence_warmup_steps,
+            )
+            if divergence_guard
+            else None
+        )
 
         if depth_indices is None and cfg is not None and "depth_indices" in cfg:
             depth_indices = cfg.depth_indices
@@ -762,12 +981,68 @@ class OceanForecastModule(ForecastModuleWithCond):
     # geoarches' `mylog` has a mutable default argument (`dct={}`) that it then
     # updates, so keys leak from one call to the next and from training into
     # validation. Passing an explicit dict every time keeps that default empty.
+    def last_checkpoint(self) -> Path | None:
+        """The newest checkpoint this run has written, or None if it has written none.
+
+        Asked of the running trainer first -- geoarches' ``CheckpointEveryNSteps``
+        is the only thing that writes during ``fit`` and it knows its own
+        directory -- and of ``modelstore/<name>`` otherwise, which is where that
+        callback is pointed on every route.
+        """
+        try:
+            trainer = self._trainer
+            for callback in getattr(trainer, "callbacks", None) or []:
+                dirpath = getattr(callback, "dirpath", None)
+                if dirpath and type(callback).__name__ == "CheckpointEveryNSteps":
+                    return guards.latest_checkpoint(dirpath)
+            return guards.latest_checkpoint(paths.run_dir(self.name))
+        except Exception:  # noqa: BLE001 - a guard must never be the thing that breaks a run
+            return None
+
+    def check_divergence(self, loss) -> None:
+        """Abort this run if ``loss`` says training has blown up.  See :class:`DivergenceGuard`.
+
+        Called from :meth:`training_step`, deliberately, rather than from a
+        Lightning callback: ``training_step`` is the one piece of code every
+        route shares -- ``make train-tiny``, notebooks 02 and 03,
+        ``scripts/finetune.slurm``, ``scripts/pretrain_large.slurm``,
+        ``geoarches.main_hydra`` and ``oceanarches.main_multinode`` -- while a
+        callback has to be wired into each entry point separately and would
+        cover only the ones somebody remembered.
+
+        Under DDP each rank checks its own loss and any rank raising takes the
+        job down, which is what is wanted: they share the same broken weights.
+        """
+        if self.divergence_guard is None:
+            return
+        step = int(self.global_step)
+        value = float(loss)
+        reason = self.divergence_guard.update(step, value)
+        if reason is None:
+            return
+        message = divergence_refusal(
+            step=step,
+            loss=value,
+            reason=reason,
+            checkpoint=self.last_checkpoint(),
+            lr=getattr(self, "lr", None),
+        )
+        # stdout as well as the exception, for the same reason every message in
+        # `oceanarches/guards.py` goes to stdout: notebooks 02 and 03 capture a
+        # subprocess' stdout and discard stderr, so an abort that spoke only
+        # through its traceback would be invisible exactly where beginners read.
+        print(message, flush=True)
+        raise LossDiverged(message)
+
     def training_step(self, batch, batch_nb):
         for metric in self.train_metrics:
             metric.reset()
         loss, targets, preds = self._predict(
             batch, self.cfg.train.metrics_kwargs.rollout_iterations
         )
+        # Before `mylog`, so that a NaN loss aborts here rather than being
+        # logged, back-propagated and written into the next checkpoint.
+        self.check_divergence(loss)
         self.mylog(dict(loss=loss))
         for metric in self.train_metrics:
             metric.update(targets, preds, timestamp=batch["timestamp"])

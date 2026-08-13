@@ -1759,6 +1759,36 @@ def test_a_run_given_as_a_path_resolves_to_that_path(fake_modelstore, tmp_path):
     assert resolve_run(str(root / "elsewhere")) == root / "elsewhere"
 
 
+def test_a_path_that_is_not_there_is_not_reported_as_a_missing_run_name(fake_modelstore, tmp_path):
+    """A name and a path are different mistakes.
+
+    `modelstore / run` is not a name lookup when `run` is absolute -- pathlib
+    discards the left operand -- so the message offered the reader the *same*
+    directory twice as two places it had looked, and then listed the runs in
+    modelstore/ as though a name had been typed. Measured against a staging
+    directory on /tmp, which is local to each node: under SLURM the login node
+    has it and the compute node does not, and the message said nothing that
+    would lead anybody there.
+
+    MUTANT: dropping the `looks_like_path` branch restores the modelstore
+    listing and fails this.
+    """
+    from oceanarches.evaluation.run_eval import resolve_run
+
+    fake_modelstore("my_first_run")
+    missing = tmp_path / "staged" / "large_eval_probe"
+    with pytest.raises(SystemExit) as caught:
+        resolve_run(str(missing))
+    message = str(caught.value)
+    assert str(missing) in message
+    assert "shared filesystem" in message and "/tmp" in message
+    # The runs under modelstore/ are not an answer to a path that is not there.
+    assert "my_first_run" not in message
+    assert "make train-tiny" not in message
+    # And the directory is never named twice as two different places.
+    assert message.count(str(missing)) == 1
+
+
 def test_an_absolute_exp_path_does_not_write_into_the_checkpoint_directory():
     """`evalstore / args.exp` discards the left operand when the right is absolute.
 

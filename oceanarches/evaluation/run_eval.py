@@ -192,23 +192,38 @@ def resolve_run(run: str, label: str | None = None) -> Path:
     """
     label = label or f"--exp {run}"
     modelstore = Path(paths.setting("MODELSTORE"))
-    root = modelstore / str(run)
+    given = Path(str(run))
+    # A name and a path are different mistakes and deserve different answers.
+    # They also have to be told apart explicitly, because `modelstore / run` is
+    # NOT a name lookup when `run` is absolute: pathlib discards the left operand,
+    # so `root` came out as the path itself and the message offered the reader the
+    # same directory twice as two places it had looked, then listed the runs in
+    # modelstore/ as though a name had been typed.
+    looks_like_path = given.is_absolute() or len(given.parts) > 1
+    root = given if looks_like_path else modelstore / str(run)
     if not root.is_dir():
-        candidate = Path(run)
-        if candidate.is_dir():
-            root = candidate
-        else:
-            available = (
-                sorted(p.name for p in modelstore.iterdir() if (p / "config.yaml").is_file())
-                if modelstore.is_dir()
-                else []
-            )
-            listing = "\n  ".join(available) if available else "(none -- train one first)"
+        if looks_like_path:
             raise SystemExit(
-                f"{label}: no such run. Looked for {root}/ and {Path(run)}/.\n"
-                f"Runs in {modelstore}/:\n  {listing}\n"
-                "Train one with: make train-tiny NAME=my_first_run"
+                f"{label}: that directory does not exist.\n"
+                "As a path, `--exp` wants the run directory itself -- the one holding "
+                "config.yaml and checkpoints/.\n"
+                "If this is running under SLURM, check the path is on a shared "
+                "filesystem: /tmp is local to each node, so a directory staged on the "
+                "login node is not there when the job runs.\n"
+                "A bare run name is looked up under "
+                f"{modelstore}/ instead."
             )
+        available = (
+            sorted(p.name for p in modelstore.iterdir() if (p / "config.yaml").is_file())
+            if modelstore.is_dir()
+            else []
+        )
+        listing = "\n  ".join(available) if available else "(none -- train one first)"
+        raise SystemExit(
+            f"{label}: no such run. Looked for {root}/.\n"
+            f"Runs in {modelstore}/:\n  {listing}\n"
+            "Train one with: make train-tiny NAME=my_first_run"
+        )
 
     if not (root / "config.yaml").is_file():
         raise SystemExit(

@@ -85,6 +85,7 @@ and 2 above have been run.
 | [docs/06_evaluation.md](docs/06_evaluation.md) | how to tell whether a model is good |
 | [docs/07_challenge_ideas.md](docs/07_challenge_ideas.md) | nine experiments you can finish in a day |
 | [docs/cheatsheet.md](docs/cheatsheet.md) | every command, every override, every error |
+| [docs/TUTORS.md](docs/TUTORS.md) | *tutors only:* the shared store, the pre-trained model, publishing |
 
 And four notebooks:
 
@@ -152,6 +153,27 @@ That is not a bug. It is what autoregressive rollout does to a small model
 trained on a single step, and fixing it is one of the best things you can do in a
 day.
 [Figure 07, the measurements and the levers.](docs/06_evaluation.md#65-the-90-day-free-run-and-what-it-tells-you)
+
+## You do not have to start from `tiny`
+
+**A pre-trained `large` model ships with the kit** -- 459.6M parameters, 75 000
+steps on 16 GH200s, about 18 hours of wall clock that you do not have to spend.
+Link it in ([docs/01 section 1.1](docs/01_setup.md#the-normal-route)) and
+fine-tune it in two hours on one GPU
+([docs/04](docs/04_scaling_finetuning.md#the-two-slurm-scripts)).
+
+On the held-out test years it beats 1-day persistence on **every one of the 17
+scored variables at every lead time out to 10 days** -- 36% on day-1 SST, 53% on
+sea surface height, 35% on sea-ice concentration -- and it stays better than
+climatology for 23 days on SST and 29 on sea-ice concentration.
+
+It drifts too, just far less violently: on the same 90-day free run its SST RMSE
+reaches 2.1 degC against a climatology's 0.68, and its global-mean SST ends
+0.37 degC off the truth. Three times climatology is a model that has run out of
+information and wandered; 15 to 20 degC is a model that has left the attractor.
+**Neither is solved, and both are yours to improve.**
+`evalstore/large_pretrained/report.md` in the shared store has the full
+scorecard, ten figures and six animations.
 
 ## The three open questions
 

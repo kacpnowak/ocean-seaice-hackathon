@@ -829,6 +829,161 @@ def test_the_refusal_says_who_holds_it_and_how_to_clear_a_dead_one(tmp_path):
     assert "NAME=my_first_run_2" in message
 
 
+class _Squeue:
+    """Stand-in for `subprocess.run([squeue, ...])`."""
+
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+
+def _with_squeue(monkeypatch, result):
+    monkeypatch.setattr(guards.shutil, "which", lambda name: "/usr/bin/squeue")
+    monkeypatch.setattr(guards.subprocess, "run", result)
+
+
+def test_a_lock_left_by_a_slurm_job_that_has_ended_is_taken_over(tmp_path, monkeypatch):
+    """The regression this whole check exists for.
+
+    SLURM enforces the wall clock with SIGKILL, so `atexit` never runs and the
+    lock outlives the job.  The very next thing anybody does is resubmit to
+    continue from the last checkpoint -- and job 1349666, which was exactly that
+    resubmission, was refused by the lock of the 12-hour run it was meant to
+    continue.  The lock was 20 minutes old and from another host, so nothing in
+    the age or the hostname could tell; only the job id could.
+
+    MUTANT: dropping the `slurm_job_is_running` branch from `lock_liveness` puts
+    this back on the 24-hour age rule and fails here.
+    """
+    monkeypatch.delenv("OCEANARCHES_SKIP_GUARDS", raising=False)
+    guards.run_lock_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    guards.run_lock_path(tmp_path).write_text(
+        json.dumps(
+            {
+                "host": "jpbo-002-25",  # another host,
+                "pid": 326978,
+                "slurm_job_id": "1325538",
+                "started": time.time() - 20 * 60,  # and only 20 minutes old
+            }
+        )
+    )
+    _with_squeue(
+        monkeypatch, _Squeue(returncode=1, stderr="slurm_load_jobs error: Invalid job id")
+    )
+
+    taken = guards.acquire_run_lock(tmp_path)  # must not raise
+    assert taken is not None
+    assert guards.read_run_lock(tmp_path)["pid"] == os.getpid()
+    guards.release_run_lock(taken)
+
+
+def test_a_lock_whose_slurm_job_is_still_queued_is_refused(tmp_path, monkeypatch):
+    """The other direction: two jobs really under one name must still be caught,
+    even when the pid is on a host we cannot ask about."""
+    monkeypatch.delenv("OCEANARCHES_SKIP_GUARDS", raising=False)
+    guards.run_lock_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    guards.run_lock_path(tmp_path).write_text(
+        json.dumps(
+            {
+                "host": "jpbo-002-25",
+                "pid": 326978,
+                "slurm_job_id": "1325538",
+                "started": time.time() - 20 * 60,
+            }
+        )
+    )
+    _with_squeue(monkeypatch, _Squeue(returncode=0, stdout="RUNNING\n"))
+    with pytest.raises(SystemExit):
+        guards.acquire_run_lock(tmp_path)
+
+
+def test_slurm_outranks_a_pid_on_this_host(monkeypatch):
+    """A pid can be reused; a job id within a cluster cannot.  A lock written by a
+    job that is still queued is believed even if the recorded pid is gone."""
+    _with_squeue(monkeypatch, _Squeue(returncode=0, stdout="RUNNING\n"))
+    monkeypatch.setattr(
+        guards.os, "kill", lambda pid, signal: (_ for _ in ()).throw(ProcessLookupError())
+    )
+    info = {"host": "mine", "pid": 1, "slurm_job_id": "42", "started": time.time()}
+    assert guards.lock_is_live(info, hostname="mine") is True
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        (_Squeue(returncode=0, stdout="RUNNING\n"), True),
+        (_Squeue(returncode=0, stdout="PENDING\n"), True),
+        # Still tearing down, and its processes can still be alive.
+        (_Squeue(returncode=0, stdout="COMPLETING\n"), True),
+        (_Squeue(returncode=0, stdout=""), False),  # gone from the queue
+        (_Squeue(returncode=0, stdout="TIMEOUT\n"), False),  # what 1325538 ended as
+        (_Squeue(returncode=0, stdout="CANCELLED\n"), False),
+        (_Squeue(returncode=1, stderr="slurm_load_jobs error: Invalid job id"), False),
+        # slurmctld down, a permissions problem: unknown, NOT dead.
+        (_Squeue(returncode=1, stderr="slurm_load_jobs error: Unable to contact"), None),
+    ],
+)
+def test_squeue_is_read_the_way_slurm_actually_answers(monkeypatch, result, expected):
+    """MUTANT: treating a non-zero exit as `False` turns a slurmctld outage into
+    two jobs training over each other, and fails the last case here."""
+    _with_squeue(monkeypatch, result)
+    assert guards.slurm_job_is_running("1325538") is expected
+
+
+@pytest.mark.parametrize("job_id", [None, "", "; rm -rf /", "large_pretrained", "1234; ls"])
+def test_only_a_job_id_shaped_job_id_reaches_a_subprocess(monkeypatch, job_id):
+    """The id comes out of a file on disk.  Nothing that is not a job id is handed
+    to `squeue`, and the caller falls back to the host and age checks instead."""
+    called = []
+    monkeypatch.setattr(guards.shutil, "which", lambda name: "/usr/bin/squeue")
+    monkeypatch.setattr(guards.subprocess, "run", lambda *a, **k: called.append(a) or _Squeue())
+    assert guards.slurm_job_is_running(job_id) is None
+    assert not called, f"{job_id!r} was passed to squeue"
+
+
+def test_a_slow_or_missing_squeue_falls_back_rather_than_hanging(monkeypatch):
+    """Training must not wait on slurmctld, and must still run where there is no SLURM."""
+    monkeypatch.setattr(guards.shutil, "which", lambda name: None)
+    assert guards.slurm_job_is_running("1325538") is None
+
+    monkeypatch.setattr(guards.shutil, "which", lambda name: "/usr/bin/squeue")
+
+    def timeout(*args, **kwargs):
+        raise guards.subprocess.TimeoutExpired(cmd="squeue", timeout=10)
+
+    monkeypatch.setattr(guards.subprocess, "run", timeout)
+    assert guards.slurm_job_is_running("1325538") is None
+    # And the fallback is the old behaviour, not a refusal.
+    info = {"host": "elsewhere", "pid": 1, "slurm_job_id": "1325538", "started": 1000.0}
+    assert guards.lock_is_live(info, hostname="mine", now=1000.0 + 25 * 3600) is False
+
+
+def test_both_messages_say_how_the_lock_was_judged(tmp_path, monkeypatch, capsys):
+    """`still running: assumed, not checked` is the honest thing to print when the
+    guard could not ask, and a takeover must say what it concluded -- the refusal
+    that cost job 1349666 gave the reader no way to tell which it was."""
+    info = {
+        "host": "jpbo-002-25",
+        "pid": 326978,
+        "slurm_job_id": "1325538",
+        "started": time.time(),
+    }
+    refusal = guards.concurrent_run_refusal(
+        "large_pretrained", tmp_path, info, reason="SLURM job 1325538 is still in the queue"
+    )
+    assert "SLURM job 1325538 is still in the queue" in refusal
+    assert "squeue -j 1325538" in refusal
+
+    guards.run_lock_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
+    guards.run_lock_path(tmp_path).write_text(json.dumps(info))
+    _with_squeue(monkeypatch, _Squeue(returncode=0, stdout="TIMEOUT\n"))
+    taken = guards.acquire_run_lock(tmp_path)
+    assert "no longer in the queue" in capsys.readouterr().out
+    guards.release_run_lock(taken)
+
+
 def test_a_lock_left_by_a_dead_process_on_this_host_is_taken_over(tmp_path, monkeypatch):
     """A crash, a `scancel` or a Ctrl-C must not lock a participant out of their own
     run name -- a guard that does that is worse than the silence it replaced."""
@@ -836,6 +991,9 @@ def test_a_lock_left_by_a_dead_process_on_this_host_is_taken_over(tmp_path, monk
     monkeypatch.setattr(
         guards.os, "kill", lambda pid, signal: (_ for _ in ()).throw(ProcessLookupError())
     )
+    # Run the suite inside an allocation and the lock carries a real, running job
+    # id, which now outranks the pid; this test is about the pid path.
+    monkeypatch.setattr(guards, "slurm_job_is_running", lambda job_id: None)
     retaken = guards.acquire_run_lock(tmp_path)  # must not raise
     assert retaken == lock
     guards.release_run_lock(retaken)

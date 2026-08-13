@@ -51,7 +51,9 @@ import inspect
 import json
 import os
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -921,10 +923,82 @@ LOCK_NAME = ".training.lock"
 #: between an age and nothing, and a wall-clock day covers the longest queue slot
 #: this kit documents.
 LOCK_STALE_AFTER_SECONDS = 24 * 3600
+#: How long to wait for `squeue` before giving up and falling back to the age.
+#: A busy slurmctld can be slow; training must not hang on it.
+SQUEUE_TIMEOUT_SECONDS = 10
+#: SLURM states in which nothing of the job is running any more.  `COMPLETING` is
+#: deliberately NOT here: the step is still being cleaned up and its processes can
+#: still be alive, so a lock held by one is believed.
+_SLURM_TERMINAL_STATES = frozenset(
+    {
+        "BOOT_FAIL",
+        "CANCELLED",
+        "DEADLINE",
+        "FAILED",
+        "NODE_FAIL",
+        "OUT_OF_MEMORY",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+        "TIMEOUT",
+    }
+)
 
 
 def run_lock_path(exp_dir: str | Path) -> Path:
     return Path(exp_dir) / LOCK_NAME
+
+
+def slurm_job_is_running(job_id: str | int | None) -> bool | None:
+    """Is this SLURM job still alive?  ``None`` when SLURM cannot answer.
+
+    The lock records the job id that wrote it, and on a batch cluster that is a
+    far better answer than either fallback below: a job that has left the queue
+    is not training, whatever host it ran on and however recently it started.
+
+    This is the *ordinary* end of a long run, not an exotic failure.  SLURM
+    enforces a wall clock with SIGKILL after the grace period, so `atexit` never
+    runs and the lock outlives the job -- and the very next thing anybody does is
+    resubmit to continue from the last checkpoint.  Job 1349666 was that
+    resubmission: it was refused by a lock left by the 12-hour run it was meant
+    to continue, having queued four nodes to do it.
+
+    Returns:
+        True if the job is queued, running or completing; False if it is gone or
+        in a terminal state; None if there is no job id, no `squeue`, or `squeue`
+        could not be believed -- in which case the caller falls back to the host
+        and age checks.
+    """
+    if job_id in (None, ""):
+        return None
+    text = str(job_id).strip()
+    # Only ever hand a job id we recognise to a subprocess: `1234`, the `1234_5`
+    # of an array task, or the `1234.0` of a step.
+    if not re.fullmatch(r"\d+(_\d+)?(\.[\w+]+)?", text):
+        return None
+    squeue = shutil.which("squeue")
+    if squeue is None:  # not a SLURM machine, or not on this PATH
+        return None
+    try:
+        done = subprocess.run(
+            [squeue, "-h", "-o", "%T", "-j", text],
+            capture_output=True,
+            text=True,
+            timeout=SQUEUE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode == 0:
+        states = done.stdout.split()
+        if not states:
+            return False  # not in the queue at all
+        return any(state.upper() not in _SLURM_TERMINAL_STATES for state in states)
+    # A job old enough to have been purged from the queue is not an error we
+    # should be shy about: `squeue -j` exits 1 and says so.  Anything else --
+    # slurmctld down, a permissions problem -- is unknown, not dead.
+    if "Invalid job id" in done.stderr:
+        return False
+    return None
 
 
 def _is_worker_rank(env: dict[str, str] | None = None) -> bool:
@@ -951,39 +1025,80 @@ def read_run_lock(exp_dir: str | Path) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
-def lock_is_live(
+def lock_liveness(
     info: dict[str, Any], hostname: str | None = None, now: float | None = None
-) -> bool:
-    """Is the process that wrote this lock plausibly still running?
+) -> tuple[bool, str]:
+    """Is the writer of this lock still running, and how do we know?
 
-    On this host the question is answerable exactly, and a dead pid means the
-    lock is rubbish left by a crash or a `scancel` -- taking it over silently is
-    the only behaviour that does not punish somebody for a node failure.  From
-    another host, only the age is knowable.
+    Three sources of truth, best first:
+
+    1. **SLURM.**  The lock records the job id.  A job that has left the queue is
+       not training, whatever host it ran on and however recently it started.
+    2. **The pid, on this host.**  Answerable exactly, and a dead pid means the
+       lock is rubbish left by a crash or a `scancel` -- taking it over silently
+       is the only behaviour that does not punish somebody for a node failure.
+    3. **The age.**  All that is knowable about another host with no SLURM.
+
+    Returns:
+        `(live, reason)`, the reason phrased to be printed after the lock file's
+        path: "SLURM job 1325538 is no longer in the queue".
     """
     host = hostname or socket.gethostname()
     now = time.time() if now is None else now
+    job = info.get("slurm_job_id")
+    running = slurm_job_is_running(job)
+    if running is not None:
+        return running, (
+            f"SLURM job {job} is still in the queue"
+            if running
+            else f"SLURM job {job} is no longer in the queue"
+        )
     if info.get("host") == host:
         pid = info.get("pid")
         if not isinstance(pid, int):
-            return False
+            return False, "it records no pid"
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            return False
+            return False, f"pid {pid} on this host is gone"
         except PermissionError:  # somebody else's process, but a process
-            return True
-        return True
+            return True, f"pid {pid} on this host is alive"
+        return True, f"pid {pid} on this host is alive"
     started = info.get("started")
     if not isinstance(started, (int, float)):
-        return False
-    return (now - started) < LOCK_STALE_AFTER_SECONDS
+        return False, "it records no start time"
+    age_hours = (now - started) / 3600
+    if (now - started) < LOCK_STALE_AFTER_SECONDS:
+        return True, (
+            f"it was written {age_hours:.1f} h ago on another host "
+            f"({info.get('host', '?')}), and there is no SLURM here to ask"
+        )
+    return False, (
+        f"it was written {age_hours:.1f} h ago, longer than the "
+        f"{LOCK_STALE_AFTER_SECONDS / 3600:.0f} h a lock from another host is believed"
+    )
+
+
+def lock_is_live(
+    info: dict[str, Any], hostname: str | None = None, now: float | None = None
+) -> bool:
+    """Just the verdict of :func:`lock_liveness`."""
+    return lock_liveness(info, hostname=hostname, now=now)[0]
 
 
 def concurrent_run_refusal(
-    name: str, exp_dir: str | Path, info: dict[str, Any], now: float | None = None
+    name: str,
+    exp_dir: str | Path,
+    info: dict[str, Any],
+    now: float | None = None,
+    reason: str | None = None,
 ) -> str:
-    """What to say when this run name is already being trained."""
+    """What to say when this run name is already being trained.
+
+    `reason` is :func:`lock_liveness`'s account of why the lock is believed --
+    without it the reader has to guess whether the guard checked anything or
+    merely found a file.
+    """
     now = time.time() if now is None else now
     started = info.get("started")
     age = (
@@ -999,14 +1114,17 @@ def concurrent_run_refusal(
         f"      host / pid     {info.get('host', '?')} / {info.get('pid', '?')}   ({job})\n"
         f"      command        {info.get('command', '?')}\n"
         f"      lock file      {run_lock_path(exp_dir)}\n"
+        f"      still running  {reason or 'assumed, not checked'}\n"
         "\n"
         "    Two runs under one name write one `checkpoints/` directory and one\n"
         "    `config.yaml`: whichever saves last wins, and the loser's GPU hours are\n"
         "    gone. Give this one a name of its own:\n"
         f"      make train-tiny NAME={name}_2\n"
         "\n"
-        "    If that job is dead -- a crashed node, a `scancel` on another host -- the\n"
-        "    lock is stale and deleting it is safe:\n"
+        "    A lock left by a SLURM job that has ended is detected and taken over on its\n"
+        "    own, so this run is being refused because the job above still appears to be\n"
+        "    alive. Check it yourself, and if it is not, deleting the lock is safe:\n"
+        f"      squeue -j {job}\n"
         f"      rm {run_lock_path(exp_dir)}"
     )
 
@@ -1027,14 +1145,18 @@ def acquire_run_lock(
     directory = Path(exp_dir)
     path = run_lock_path(directory)
     info = read_run_lock(directory)
-    if info is not None and lock_is_live(info, hostname=hostname):
-        _refuse("already training", concurrent_run_refusal(directory.name, directory, info))
-        return None  # only reached with OCEANARCHES_SKIP_GUARDS set
     if info is not None:
+        live, why = lock_liveness(info, hostname=hostname)
+        if live:
+            _refuse(
+                "already training",
+                concurrent_run_refusal(directory.name, directory, info, reason=why),
+            )
+            return None  # only reached with OCEANARCHES_SKIP_GUARDS set
         _emit(
             [
                 f"[oceanarches] a stale lock from {info.get('host', '?')} pid "
-                f"{info.get('pid', '?')} was left behind; taking it over.",
+                f"{info.get('pid', '?')} was left behind ({why}); taking it over.",
             ]
         )
     directory.mkdir(parents=True, exist_ok=True)

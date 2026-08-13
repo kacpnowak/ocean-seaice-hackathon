@@ -229,6 +229,28 @@ def test_the_pre_training_job_launches_the_entry_point_that_can_do_four_nodes():
     assert "--config-dir" not in text
 
 
+def test_a_rank_that_refuses_to_start_takes_the_whole_step_down_with_it():
+    """The startup guards refuse on rank 0 only, and rank 0 is also the rendezvous
+    master.  Without `--kill-on-bad-exit=1` the remaining 15 ranks sit in
+    `init_process_group` waiting for a store that will never be created, for the
+    full 30-minute default timeout, and what comes out is 15 copies of
+    `DistNetworkError: The client socket has timed out` -- which reads as a
+    network fault and buries the real message two thousand lines up.  Job 1349666
+    and job 1342138 each burned 4 nodes for 1 h 15 that way.
+
+    MUTANT: removing the flag from the srun line fails this.
+    """
+    srun_lines = [
+        line for line in SLURM_SCRIPT.read_text().splitlines() if line.strip().startswith("srun ")
+    ]
+    assert srun_lines
+    for line in srun_lines:
+        assert "--kill-on-bad-exit=1" in line, (
+            f"{line.strip()!r} lets a refusal on rank 0 hang the other ranks until the "
+            "distributed rendezvous times out"
+        )
+
+
 def test_the_pre_training_job_is_still_submittable_on_jupiter():
     """`#SBATCH --requeue` makes the job unsubmittable here, not just unrequeued:
 

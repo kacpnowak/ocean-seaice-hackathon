@@ -302,7 +302,20 @@ echo
 # of the script.
 # Do NOT pin CUDA_VISIBLE_DEVICES here: each rank must see its own card, and
 # SLURM_LOCALID already selects it.
-srun --cpu-bind=none .venv/bin/python -m oceanarches.main_multinode "${HYDRA_ARGS[@]}" &
+#
+# `--kill-on-bad-exit=1` is not a nicety.  The startup guards refuse on rank 0
+# only (every rank composes the config, so a guard that fired on all 16 would cry
+# wolf at the very configuration this script exists for).  Rank 0 is also the
+# rendezvous master.  So when a guard refuses -- job 1349666, a stale lock -- rank
+# 0 prints the reason and exits, and the remaining 15 ranks sit in
+# `init_process_group` waiting for a store that will never be created, for the
+# full 30-minute default timeout.  What comes out at the end is 15 copies of
+# `DistNetworkError: The client socket has timed out`, which reads as a network
+# fault and buries the one line that says what actually happened two thousand
+# lines up.  Two of those cost 4 nodes x 1 h 15 each.  With this flag srun tears
+# the step down the moment any task exits non-zero, and the refusal is the last
+# thing in the log.
+srun --cpu-bind=none --kill-on-bad-exit=1 .venv/bin/python -m oceanarches.main_multinode "${HYDRA_ARGS[@]}" &
 TRAIN_PID=$!
 
 # `wait` is interruptible, which is what lets the USR1 trap run.  A trapped

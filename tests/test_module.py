@@ -38,6 +38,7 @@ from oceanarches.dataloaders.forcing import ForcingSource
 from oceanarches.dataloaders.glorys import GlorysForecast
 from oceanarches.dataloaders.variables import DEPTH_PRESETS, N_LAT, N_LON, get_component
 from oceanarches.lightning_modules.ocean_forecast import (
+    LossDiverged,
     OceanForecastModule,
     _select_statistics,
     compute_lat_weights_glorys,
@@ -938,3 +939,68 @@ def test_an_empty_depth_selection_is_refused(tiny_stats_file):
     # None still means every prepared level.
     selected = _select_statistics(stats, "level", ["thetao"], None)
     assert selected["std"].shape[1] > 0
+
+
+# ---------------------------------------------------------------------------
+# The divergence guard, where it is wired in
+# ---------------------------------------------------------------------------
+# The rule itself, and the measured trajectory it was chosen against, live in
+# tests/test_divergence.py. What is checked here is that `training_step` -- the
+# one piece of code `make train-tiny`, the notebooks, scripts/finetune.slurm,
+# `geoarches.main_hydra` and `oceanarches.main_multinode` all share -- really
+# consults it, and that the config key really turns it off.
+def test_a_non_finite_training_loss_aborts_the_run(full_module, monkeypatch, tmp_path, capsys):
+    """A NaN loss must stop the run there, naming the checkpoint and the way back.
+
+    MUTANT: delete the `self.check_divergence(loss)` line from `training_step`
+    and this trains on happily, which is exactly the eight wasted hours this
+    guard exists to prevent.
+    """
+    written = tmp_path / "checkpoints" / "checkpoint_global_step=15000.ckpt"
+    written.parent.mkdir(parents=True)
+    written.touch()
+    monkeypatch.setattr(paths, "run_dir", lambda name: tmp_path)
+
+    def diverged(batch, rollout_iterations):
+        return torch.tensor(float("nan")), None, None
+
+    monkeypatch.setattr(full_module, "_predict", diverged)
+    with pytest.raises(LossDiverged) as raised:
+        full_module.training_step(make_batch(full_module), 0)
+
+    message = str(raised.value)
+    assert "NaN" in message
+    assert str(written) in message, "the abort did not name the last checkpoint written"
+    assert "++module.module.lr=" in message, "the abort did not name the way back"
+    # Notebooks 02 and 03 capture stdout and discard stderr.
+    assert "TRAINING DIVERGED" in capsys.readouterr().out
+
+
+def test_the_guard_is_on_by_default(full_module):
+    """Every route gets it without editing a config.
+
+    MUTANT: `divergence_guard: bool = False` in the constructor.
+    """
+    assert full_module.divergence_guard is not None
+
+
+def test_the_guard_can_be_turned_off_from_the_module_config(real_masks_path):
+    """`++module.module.divergence_guard=False`, for somebody who means to ride a spike.
+
+    A plain `**kwargs` catch-all would swallow this override silently -- and
+    `oceanarches.guards.override_problems` would then reject the key as one
+    nothing reads -- so it is a named constructor argument.
+
+    MUTANT: rename the constructor argument and this build raises instead.
+    """
+    module = build_module(extra=["++module.module.divergence_guard=False"])
+    assert module.divergence_guard is None
+    module.check_divergence(torch.tensor(float("nan")))  # a no-op, not a refusal
+
+
+def test_the_thresholds_are_configurable_too(real_masks_path):
+    """MUTANT: hardcode `DivergenceGuard()` in the constructor and these come back 100/50."""
+    module = build_module(
+        extra=["++module.module.divergence_factor=3", "++module.module.divergence_patience=2"]
+    )
+    assert (module.divergence_guard.factor, module.divergence_guard.patience) == (3.0, 2)
