@@ -472,8 +472,10 @@ climatology for 23 days on SST and 29 on sea-ice concentration.
 them for your own model; `evalstore/large_pretrained/report.md` in the shared
 store is its full scorecard.
 
-Fine-tune it rather than training from scratch: you have a day, and the
-pre-training was 18 hours on 16 GPUs.
+Start from it rather than training from scratch: you have a day, and the
+pre-training was 18 hours on 16 GPUs. **On a 40 GiB A100 that means scoring
+against it, not fine-tuning it** -- see the memory note above -- so it is your
+baseline and the thing your own model has to beat. Fine-tune `base` or smaller.
 
 [`scripts/finetune.slurm`](../scripts/finetune.slurm) is (b) above with the
 mistakes made impossible. Every knob is an environment variable with a default

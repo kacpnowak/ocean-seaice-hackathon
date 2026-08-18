@@ -7,7 +7,7 @@ answer to each failure we have already seen somebody hit.
 
 ---
 
-## 0. This kit was moved from JUPITER, and not all of it is verified here
+## 0. This kit was moved from JUPITER
 
 Everything below was built, measured and run on **JUPITER**. It now lives on
 **JURECA**, under `/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice`,
@@ -55,28 +55,41 @@ filesystems and are not mounted here.
 `make doctor`. The account, partition and core count are not guesses -- they are
 what the other training2635 challenges already run.
 
-### What has NOT been verified on JURECA
+### What has been verified on JURECA, and what has not
 
-The move was made from a JUPITER login node, which has no access to JURECA, so
-**nothing in this kit has ever been executed on JURECA.** Specifically:
+The move itself was made from a JUPITER login node with no access to JURECA, so
+this section once said that nothing here had ever run. **That is no longer true:
+the kit has since been walked end to end on JURECA as a participant would.**
+What that found is in the commit `Make the quickstart work on JURECA`, and the
+two things it fixed had both stopped a fresh clone before it trained anything --
+`make setup` hitting the **inode** quota on `$HOME` (not a space quota; `df`
+shows terabytes free), and `make train-tiny` dying of CUDA OOM because every
+preset's `batch_size` was measured on a 96 GB GH200.
 
-1. **The environment has never been built here.** `make setup` pulls x86_64
-   CUDA wheels it has never pulled on this machine.
-2. **The test suite has never run on x86_64.**
-3. **`make doctor` has never run here** -- it is the fastest way to find out
-   what else is wrong, and it is the right first command.
-4. **No training, evaluation or fine-tune has ever run here.**
-5. **The batch sizes are wrong until proven otherwise.** Every `batch_size` in
-   `configs/module/*.yaml` was measured against a 96 GB GH200 -- `tiny` at
-   batch 8 peaked at 42.6 GiB there. JURECA's cards are smaller. **Run
-   `make benchmark` before queueing anything long**; it reports peak memory per
-   preset, and halving `batch_size` is the documented fix.
-6. **Every wall-clock figure in these documents is a GH200 measurement** -- "31
-   minutes for `tiny`", "18 hours for `large`", the `make setup` timing. They
-   were not rewritten, because inventing numbers is worse than labelling old
-   ones. Re-measure what you intend to quote to participants.
+**Verified here, on a dc-gpu A100-SXM4-40GB (39.49 GiB usable):**
 
-The first hour on JURECA, in order:
+| | |
+|---|---|
+| `make setup` | 58 s cold, with `UV_*` pointed at `.uv/` on scratch |
+| `make doctor` | passes, and now checks `$HOME` inode headroom |
+| `make test` | the suite, on x86_64 |
+| `make train-tiny` | 21.44 GiB peak at `batch_size 4`, 1.98 it/s, ~34 min |
+| `make eval NAME=large_pretrained` | fits and scores |
+
+**The one thing that does not fit: fine-tuning `large` on this card.** It needs
+50.81 GiB at batch 1 with gradient checkpointing already on, against 39.5 GiB,
+and more GPUs do not help -- DDP replicates the model on every rank. Inference
+fits, so `large_pretrained` is fully usable for scoring and as a baseline; for
+fine-tuning, point participants at `base` or smaller. README and
+[docs/04](04_scaling_finetuning.md) both say this.
+
+**Still not re-measured:** `small`, `base` and `large` batch sizes beyond the
+`batch_size_40gib` numbers now in `configs/module/*.yaml` (`tiny` 4, `small` 2,
+`base` 1), and every wall-clock figure other than the two above. The GH200
+numbers were labelled rather than rewritten, because inventing numbers is worse
+than dating old ones -- re-measure what you intend to quote.
+
+If you rebuild from scratch on another machine, the order that works:
 
 ```bash
 cd /p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
@@ -89,8 +102,6 @@ make benchmark                 # 4: peak memory per preset -- the batch-size ans
 make eval NAME=large_pretrained EVAL_ARGS="--n-inits 2 --lead-days 2 --skip-animations"
                                # 5: proves the shipped checkpoint loads and scores here
 ```
-
-Only after 5 is the pre-trained model known to work on this machine.
 
 ## 1. Before day one
 
@@ -233,7 +244,14 @@ the newest checkpoint in `checkpoints/`, so the run directory is what ships and
 the intermediate checkpoints are dead weight rather than a problem
 ([section 3.4](#34-housekeeping)).
 
-Participants fine-tune it on one GPU with
+**On JURECA, participants score it rather than fine-tune it.** `large` needs
+50.81 GiB to train at batch 1 with gradient checkpointing on, and a dc-gpu A100
+has 39.5 GiB; more GPUs do not help, because DDP replicates the model per rank.
+`make eval NAME=large_pretrained` fits and is tested, so it works as a baseline
+and as the thing their own model has to beat. **Fine-tuning is `base` or
+smaller here.**
+
+On a 96 GB GH200 the fine-tune path is two hours on one card:
 
 ```bash
 sbatch --export=ALL,FROM=large_pretrained,MODULE=large,NAME=my_finetune \
