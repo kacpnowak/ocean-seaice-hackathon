@@ -12,10 +12,10 @@ will be able to tell from the logs whether it worked.
 ## 3.1 Get a GPU and run one command
 
 ```bash
-srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
-     --cpus-per-task=16 --time=01:00:00 --pty bash
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=01:00:00 --pty bash
 export CUDA_VISIBLE_DEVICES=0
-cd /e/scratch/hclimrep/$USER/hackathon-ocean-sea-ice
+cd /p/scratch/training2635/4_ocean_ai/$USER/hackathon-ocean-sea-ice
 
 make train-tiny NAME=my_first_run
 ```
@@ -97,7 +97,7 @@ one is told which host and pid holds `modelstore/<name>/.training.lock`).
 
 ```
 wandb: W&B syncing is set to `offline` in this directory. ...
-Working dir /e/scratch/.../hackathon-ocean-sea-ice
+Working dir /p/scratch/.../hackathon-ocean-sea-ice
 is main node True
 registering exp on main node
 ```

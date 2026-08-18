@@ -55,15 +55,22 @@ DATALOADER ?= glorys
 #   make train-tiny NAME=my_run HYDRA_ARGS="++max_steps=1000 ++module.module.lr=1e-4"
 HYDRA_ARGS ?=
 # configs/cluster/*.yaml: batch size, precision and dataloader workers.
-# Use CLUSTER=local on a machine without a GPU, jupiter_4gpu for a whole node.
-# There is a jupiter_4nodes too, but `make train` cannot use it: more than one
+# Use CLUSTER=local on a machine without a GPU, jureca_4gpu for a whole node.
+# There is a jureca_4nodes too, but `make train` cannot use it: more than one
 # node needs `python -m oceanarches.main_multinode` rather than
 # `geoarches.main_hydra`, which builds its Trainer without `num_nodes`. That is
 # what scripts/pretrain_large.slurm runs.
-CLUSTER ?= jupiter_1gpu
+# The jupiter_* configs are kept for the machine this kit was built on; the
+# batch sizes in configs/module/*.yaml were measured there, on 96 GB GH200s, and
+# have NOT been re-measured on JURECA -- run `make benchmark` first.
+CLUSTER ?= jureca_1gpu
 YEARS ?=
 LEAD_DAYS ?= 10
 EVAL_ARGS ?=
+# Extra flags for `make benchmark`, for the same make-eats-`=` reason as
+# HYDRA_ARGS.  A preset that does not fit this cluster's card is measured with
+#   make benchmark BENCH_ARGS="--presets small --batch-size 2"
+BENCH_ARGS ?=
 # `make couple`: the two trained components, and how they are stepped.
 OCEAN ?= ocean_tiny
 SEAICE ?= seaice_tiny
@@ -175,7 +182,7 @@ train:  ## Train any preset:  make train MODULE=base NAME=my_base_run
 
 .PHONY: benchmark
 benchmark:  ## Measure params + step time + projected wall clock for every preset
-	$(PY) scripts/benchmark_step.py
+	$(PY) scripts/benchmark_step.py $(BENCH_ARGS)
 
 # --- evaluation ------------------------------------------------------------
 # EVAL_ARGS takes the rest of run_eval's flags, for the same reason HYDRA_ARGS

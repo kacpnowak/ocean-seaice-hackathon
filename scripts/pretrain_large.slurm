@@ -69,6 +69,9 @@
 # One thing this does NOT adjust: `lr`.  The effective batch goes from 4 to 16,
 # and configs/module/large.yaml explains what that means and gives the override.
 #
+# NOTE: the cap below is JUPITER's and has NOT been checked on JURECA. Confirm
+# with `sacctmgr show qos <qos> format=Name,MaxWall` for dc-gpu before planning
+# the number of launches; 12 h is safe under any larger cap, just not optimal.
 # The booster QOS caps a job at **12 hours**:
 #
 #   $ sacctmgr show qos part_booster format=Name,MaxWall
@@ -78,12 +81,12 @@
 # the one-node plan needed.  That is expected and is handled two ways, below.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=ocean-pretrain-large
-#SBATCH --account=hclimrep
-#SBATCH --partition=booster
+#SBATCH --account=training2635
+#SBATCH --partition=dc-gpu
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=72
+#SBATCH --cpus-per-task=12
 #SBATCH --time=12:00:00
 #SBATCH --signal=B:USR1@600
 #SBATCH --output=logs/pretrain-large-%j.out
@@ -108,15 +111,15 @@ MODULE="${MODULE:-large}"
 DATALOADER="${DATALOADER:-glorys}"
 
 # The cluster config follows the allocation, because it is the one thing that
-# has to agree with `--nodes`: jupiter_4nodes declares `num_nodes: 4` and
+# has to agree with `--nodes`: jureca_4nodes declares `num_nodes: 4` and
 # `oceanarches.main_multinode` refuses to run it in a job of any other size.
-# jupiter_4gpu declares nothing, so the shim reads the node count off the
+# jureca_4gpu declares nothing, so the shim reads the node count off the
 # allocation and it is correct at 1 node (and at 2, for an experiment).
 if [[ -z "${CLUSTER:-}" ]]; then
     if [[ "${SLURM_NNODES:-1}" == "4" ]]; then
-        CLUSTER=jupiter_4nodes
+        CLUSTER=jureca_4nodes
     else
-        CLUSTER=jupiter_4gpu
+        CLUSTER=jureca_4gpu
     fi
 fi
 

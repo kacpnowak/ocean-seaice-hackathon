@@ -27,11 +27,12 @@ make doctor
 
 # 4. get a GPU -- and you do need one: the login node's card is real,
 #    is shared with everyone logged in, and is not allocated to you
-srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
-     --cpus-per-task=16 --time=01:00:00 --pty bash
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=01:00:00 --pty bash
 export CUDA_VISIBLE_DEVICES=0
 
-# 5. train                                                     (30 min 51 s)
+# 5. train                             (~34 min on a JURECA dc-gpu A100;
+#                                       30 min 51 s measured on a GH200)
 make train-tiny NAME=my_first_run
 
 # 6. score it against persistence and climatology, with figures  (4-6 min)
@@ -56,7 +57,7 @@ or copy that one file to your laptop -- it is self-contained. From **your own
 machine**, not from the cluster:
 
 ```bash
-scp <you>@<the JUPITER login host>:/e/scratch/hclimrep/<you>/hackathon-ocean-sea-ice/evalstore/my_first_run/report.html .
+scp <you>@<the JURECA login host>:/p/scratch/training2635/4_ocean_ai/<you>/hackathon-ocean-sea-ice/evalstore/my_first_run/report.html .
 ```
 
 The host is whichever one you already `ssh` into; the path is absolute, and
@@ -66,6 +67,12 @@ Those are stopwatch measurements on one JUPITER booster GH200, not targets.
 `make train-tiny` took **1851 s = 31 minutes** for 4000 steps and a cold-start
 rehearsal from a fresh clone measured **1767 s = 29 min 27 s** for the same
 command. [The full walk-through is here.](docs/03_first_model.md)
+
+**On JURECA, expect about 34 minutes.** `dc-gpu` is a 40 GiB A100 rather than a
+96 GiB GH200, so `cluster=jureca_1gpu` trains `tiny` at `batch_size: 4` -- the
+preset's 8 wants 42.9 GiB and does not fit. Measured here: 21.44 GiB peak,
+1.98 it/s, so 4000 steps is roughly 34 minutes. You do not have to pass anything
+for that; the cluster config carries it.
 
 If you have no GPU yet, start with
 [`notebooks/01_explore_glorys.ipynb`](notebooks/01_explore_glorys.ipynb) --
@@ -158,9 +165,21 @@ day.
 
 **A pre-trained `large` model ships with the kit** -- 459.6M parameters, 75 000
 steps on 16 GH200s, about 18 hours of wall clock that you do not have to spend.
-Link it in ([docs/01 section 1.1](docs/01_setup.md#the-normal-route)) and
-fine-tune it in two hours on one GPU
-([docs/04](docs/04_scaling_finetuning.md#the-two-slurm-scripts)).
+Link it in ([docs/01 section 1.1](docs/01_setup.md#the-normal-route)).
+
+**You can score it on JURECA, but you cannot fine-tune it there.** `large` needs
+50.81 GiB at batch 1 *with* gradient checkpointing already on, and a dc-gpu A100
+has 39.5 GiB, so the fine-tuning path in
+[docs/04](docs/04_scaling_finetuning.md#the-two-slurm-scripts) -- measured at two
+hours on one GH200 -- dies on its first step here, and more GPUs do not help
+(DDP replicates the model on every rank). What does work on one A100:
+
+* **`make eval` on `large_pretrained`** -- inference has no optimiser state and no
+  stored activations, and it fits comfortably. Tested.
+* **fine-tuning `base` or smaller.** `make benchmark` prints what fits.
+
+That is a property of the card, not of the kit, and the scorecard below was
+measured on the GH200 run rather than reproduced here.
 
 On the held-out test years it beats 1-day persistence on **every one of the 17
 scored variables at every lead time out to 10 days** -- 36% on day-1 SST, 53% on

@@ -17,7 +17,7 @@
 #   MAX_STEPS   fine-tuning budget                               [2000]
 #   SAVE_EVERY  checkpoint interval; must divide MAX_STEPS       [500]
 #   LR          learning rate                                    [1e-4]
-#   CLUSTER     configs/cluster/*.yaml -- batch, precision, workers  [jupiter_1gpu]
+#   CLUSTER     configs/cluster/*.yaml -- batch, precision, workers  [jureca_1gpu]
 #   EXTRA_HYDRA_ARGS  further hydra overrides, space separated     [none]
 #
 # The wall clock is a real #SBATCH directive and not a variable, because SBATCH
@@ -53,12 +53,12 @@
 # is near 0.74.  If step 0 reads ~3800, the weights did not land.
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=ocean-finetune
-#SBATCH --account=hclimrep
-#SBATCH --partition=booster
+#SBATCH --account=training2635
+#SBATCH --partition=dc-gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=12
 #SBATCH --time=02:00:00
 #SBATCH --output=logs/finetune-%j.out
 #SBATCH --error=logs/finetune-%j.out
@@ -78,7 +78,7 @@ FROM="${FROM:-task6_tiny}"
 NAME="${NAME:-${FROM}_finetuned}"
 MODULE="${MODULE:-tiny}"
 DATALOADER="${DATALOADER:-glorys}"
-CLUSTER="${CLUSTER:-jupiter_1gpu}"
+CLUSTER="${CLUSTER:-jureca_1gpu}"
 MAX_STEPS="${MAX_STEPS:-2000}"
 SAVE_EVERY="${SAVE_EVERY:-500}"
 LR="${LR:-1e-4}"
@@ -119,10 +119,16 @@ if (( MAX_STEPS % SAVE_EVERY != 0 )); then
     exit 1
 fi
 
-# The booster allocates WHOLE NODES, so --gres=gpu:1 still comes back with all
-# four cards and Lightning's devices="auto" would shard the data four ways
-# inside this single process -- a quarter of the dataset, with a loss curve that
-# looks completely normal.  There is no core count that avoids this.
+# Pin this process to exactly one card, whatever the allocation handed back.
+#
+# On JUPITER this was mandatory: the booster allocates WHOLE NODES, so --gres=gpu:1
+# came back with all four cards and Lightning's devices="auto" would shard the
+# data four ways inside this single process -- a quarter of the dataset, with a
+# loss curve that looks completely normal.  JURECA's dc-gpu is not whole-node, so
+# --gres=gpu:1 should really give one card and this line should be a no-op.
+# It is kept because it is a no-op when the allocation is already one GPU, and it
+# is the difference between a correct run and a silently quartered one when it
+# is not.
 export CUDA_VISIBLE_DEVICES=0
 
 echo "=============================================================="

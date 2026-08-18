@@ -13,7 +13,7 @@ explanation.
 make help          # list them all
 make setup         # build .venv (~30 s warm, ~5 min cold)
 make doctor        # check python, allocation, GPU, data, stats  (~6 s)
-make test          # the test suite (604 passed, 1 skipped, 82 s) -- after `make stats`
+make test          # the test suite (722 passed, 1 skipped, 3 min 40 s) -- after `make stats`
 make lint          # ruff check + ruff format --check
 make format        # fix formatting
 
@@ -141,12 +141,12 @@ Check what a command will actually do without running it:
 
 ```bash
 # interactive shell on one GPU for an hour
-srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
-     --cpus-per-task=16 --time=01:00:00 --pty bash
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=01:00:00 --pty bash
 
 # one command on one GPU
-srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
-     --cpus-per-task=16 --time=01:00:00 make train-tiny NAME=my_run
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=01:00:00 make train-tiny NAME=my_run
 
 sbatch run.slurm            # submit a batch job
 squeue -u $USER             # what is queued or running
@@ -156,6 +156,18 @@ tail -f logs/*.out          # watch the output
 ```
 
 **Always set `export CUDA_VISIBLE_DEVICES=0` in a single-GPU job.**
+
+**A script you hand to `srun` must live on `/p/scratch`, not in `/tmp`.** `/tmp`
+is local to each node, so a script written on the login node is invisible to the
+compute node that is supposed to run it:
+
+```
+/usr/bin/bash: /tmp/my_experiment.sh: No such file or directory
+srun: error: jrc0350: task 0: Exited with exit code 127
+```
+
+The repository is already on scratch, so anywhere inside it works. The same
+applies to anything a job reads or writes: keep it under `/p/scratch`.
 
 ## Evaluation one-liners
 
@@ -228,7 +240,7 @@ print(type(m).__name__, m.component.name, sum(p.numel() for p in m.parameters())
 | `InstantiationException` wrapping `FileNotFoundError` from `make couple` | a mistyped component run | fixed: `--components ocean=X seaice=Y` now names the component and lists the runs that exist |
 | `No prepared file covers the 'test' split (2021-2023)` | you prepared a subset of years; `make eval` scores on `test` | `make prep-data YEARS="2021-2023"`, or `make prep-data-slurm`. `make doctor` WARNs about this. |
 | `[2026] REFUSED: 282 of 365 days are absent` | `make prep-data` with no `YEARS` met a year the archive has not finished | that is the guard working. `--allow-incomplete` if a partial year is really what you want. |
-| `torch.OutOfMemoryError: CUDA out of memory` | a bigger `emb_dim`, `batch_size` or `rollout_iterations`; `tiny` already peaks at 42.6 GiB of 96 | `HYDRA_ARGS="++batch_size=4"`, then `++module.backbone.gradient_checkpointing=True`; `make benchmark` prints every preset's peak before you queue |
+| `torch.OutOfMemoryError: CUDA out of memory` | a bigger `emb_dim`, `batch_size` or `rollout_iterations`. On JURECA's 40 GiB A100 the *presets* do not fit -- `tiny` at its shipped batch 8 wants 42.9 GiB -- which is why `cluster=jureca_1gpu` overrides `batch_size` to 4 (21.44 GiB measured) | halve it again with `HYDRA_ARGS="++batch_size=2"`, then `++module.backbone.gradient_checkpointing=True`; `make benchmark` prints every preset's peak before you queue, and records an OOM as a result rather than aborting the sweep |
 | `RuntimeError: mat1 and mat2 shapes cannot be multiplied` | you raised `emb_dim` without `num_heads` and `out_emb_dim` | all four move together -- the table in [docs/04 4.1](04_scaling_finetuning.md#41-the-four-presets). The module now refuses to build and says which disagree. |
 | ``FATAL: run `x` already exists and was trained with a DIFFERENT architecture`` | you reused a run name under another preset (`NAME=baseline0 MODULE=small`) | geoarches' resume path copies the STORED `module`/`dataloader` config over yours, so the old network would be trained under the new name. Use a name of its own, or `mv modelstore/x modelstore/x.old` |
 | ``FATAL: run `x` is already being trained by another process`` | two terminals, one forgotten `NAME=` | give the second one a name of its own. A lock whose SLURM job has ended is cleared automatically, so this means the other job is genuinely alive -- the message prints its host, pid and job id. Confirm with `squeue -j <id>`, and only then `rm modelstore/x/.training.lock` |
@@ -244,11 +256,13 @@ print(type(m).__name__, m.component.name, sum(p.numel() for p in m.parameters())
 | depths | 13 levels, 0.49 m to 1684 m |
 | splits | train 9488 / val 730 / test 1094 / holdout 730 samples |
 | the line to beat | 1-day persistence loss **0.82-0.87**, moves with the split |
-| `tiny` | 13.2 M parameters, 29-31 min on one GPU, 12.8% better than persistence |
+| `tiny` | 13.2 M parameters, 29-31 min on one GH200 / **~34 min on a JURECA A100**, 12.8% better than persistence |
+| JURECA batch sizes | dc-gpu is an **A100-SXM4-40GB** (39.5 GiB usable), not the 96 GB GH200 the presets were sized for. Measured with `make benchmark`: `tiny` **4** (21.44 GiB), `small` **2** (21.43), `base` **1** (21.33), `large` **does not fit at all** (needs 50.81 at batch 1 with checkpointing on). `cluster=jureca_*` reads these from each preset's `batch_size_40gib`, so you do not pass anything. |
 | day-1 SST | model 0.125 degC, persistence 0.131 degC |
 | a full `make eval` | 232-246 s cold, ~5 s warm, ~4 s warm with `--skip-animations`; 10 figures, 6 animations, 2 reports, ~750 MB |
-| the test suite | 604 passed, 1 skipped, 82 s (602/3 without `make forcing-stats`; 495/110 with no statistics at all) |
-| a fresh clone needs | `make setup` (~30 s warm, ~5 min cold), `make stats` (~8 min), and its own `modelstore/` with the shipped runs symlinked in ([docs/01 1.1](01_setup.md#the-normal-route)) |
+| the test suite | **722 passed, 1 skipped, 3 min 40 s** measured on a JURECA login node (an older count of 604/82 s is what this table said before; the skip and the without-statistics behaviour are unchanged) |
+| a fresh clone needs | `make setup` (**58 s measured cold on JURECA**, including the 2 GB torch download), `make stats` (~8 min), and its own `modelstore/` with the shipped runs symlinked in ([docs/01 1.1](01_setup.md#the-normal-route)) |
+| `$HOME` on JURECA | an **inode** quota of about 2050 files, of which a fresh account uses ~480. `df` shows terabytes free because the limit is on the file COUNT. `make setup` keeps uv's interpreter and wheel cache in `.uv/` under the repo for this reason, and `make doctor` measures the headroom. Anything else you install -- pip caches, `~/.cache/huggingface` -- must go on scratch too. |
 
 ---
 

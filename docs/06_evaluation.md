@@ -41,8 +41,8 @@ you or be served to you. Either:
 
 ```bash
 # from YOUR machine, not from the cluster. <host> is whichever one you already
-# ssh into JUPITER through; the path is absolute and starts /e/scratch.
-scp <you>@<host>:/e/scratch/hclimrep/<you>/hackathon-ocean-sea-ice/evalstore/task6_tiny/report.html .
+# ssh into JURECA through; the path is absolute and starts /p/scratch.
+scp <you>@<host>:/p/scratch/training2635/4_ocean_ai/<you>/hackathon-ocean-sea-ice/evalstore/task6_tiny/report.html .
 open report.html            # or xdg-open, or drag it into a browser tab
 ```
 

@@ -1,5 +1,8 @@
 # Environment
 .venv/
+# uv's interpreter and wheel cache, kept here rather than in the inode-quotaed
+# $HOME -- see scripts/setup_env.sh section 0.
+.uv/
 *.egg-info/
 __pycache__/
 *.py[cod]

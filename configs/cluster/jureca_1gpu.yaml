@@ -1,0 +1,90 @@
+# One GPU on a JURECA dc-gpu node.  The default for participants.
+#
+#   srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+#        --cpus-per-task=12 --time=01:00:00 --pty bash
+#   make train-tiny NAME=my_run
+#
+# ---------------------------------------------------------------------------
+# THE BATCH SIZE HERE IS MEASURED ON JURECA, AND IT IS NOT THE PRESET'S
+# ---------------------------------------------------------------------------
+# This kit was built on JUPITER, whose booster nodes carry GH200s with 96 GB of
+# HBM each, and every `batch_size` in configs/module/*.yaml was measured to fit
+# THAT.  `tiny` at its shipped batch_size 8 peaked at 42.6 GiB of 96 there.
+#
+# JURECA's dc-gpu cards are NVIDIA A100-SXM4-40GB -- 39.49 GiB usable -- so the
+# preset's batch 8 CANNOT fit, and `make train-tiny` died of an out-of-memory
+# error on the documented quickstart path until this file stopped inheriting it.
+# Measured here, on a dc-gpu A100, with `make benchmark`:
+#
+#     tiny  batch 4   21.44 GiB peak   0.312 s/step   5.36 GiB/sample
+#     tiny  batch 8   OOM              (5.36 x 8 = 42.9 GiB, against 39.49)
+#
+# Hence `batch_size: ${module.batch_size_40gib}` below rather than
+# `${module.batch_size}` -- each preset carries both numbers, so the GH200
+# measurement stays true for the machine it was taken on and
+# scripts/pretrain_large.slurm keeps working there.  On this card:
+#
+#     tiny 4    small 2    base 1    large does not fit at all
+
+#
+# If you are on a bigger card, or you want the preset's own batch back:
+#
+#     make train-tiny NAME=my_run HYDRA_ARGS="++batch_size=8"
+#
+# and if even 4 will not fit (a fuller card, a bigger preset):
+#
+#     HYDRA_ARGS="++batch_size=2 ++module.backbone.gradient_checkpointing=True"
+#
+# `small`, `base` and `large` have NOT been re-measured here; `small` at its
+# shipped batch 4 does NOT fit an A100 40GB.  Measure before you queue:
+#
+#     make benchmark                      # every preset, at this file's batch
+#     make benchmark BENCH_ARGS="--presets small --batch-size 2"
+#
+# An out-of-memory death is still caught and explained by the guard in
+# oceanarches/guards.py, which names `batch_size` rather than PyTorch's
+# allocator advice.
+#
+# Every wall-clock figure quoted in the documents ("31 minutes for `tiny`") is
+# a GH200 measurement.  On JURECA at batch 4, `tiny` measured 1.98 it/s, i.e.
+# about 34 minutes for its 4000 steps.
+# ---------------------------------------------------------------------------
+#
+# `--ntasks=1` is not optional: without it, `--cpus-per-task=N` launches N
+# concurrent copies of your script.  That has already corrupted a measurement
+# and half-mutated a source file in this project.
+#
+# Unlike JUPITER's booster, dc-gpu is not allocated whole-node, so a
+# `--gres=gpu:1` request really does come back with one card and you should NOT
+# need `CUDA_VISIBLE_DEVICES=0`.  Check it anyway the first time: if Lightning
+# reports more than one device, it will shard your data across all of them
+# inside one process and the loss curve will look completely normal while you
+# train on a fraction of the dataset.  Count the batches in epoch 0.
+#
+# wandb stays OFFLINE, and the root config ships `log: True` on purpose: geoarches
+# writes `modelstore/<name>/config.yaml` -- the file `load_module` needs to reload
+# a run -- only when `log` is on. Offline means it writes to ./wandblogs and never
+# asks for an account, a key or a network. Set `online` here if you want it
+# streamed, and fill in `entity` in configs/config.yaml.
+wandb_mode: offline
+use_custom_requeue: False
+
+# bf16. Same speed as fp16 with none of the loss-scaling drama, and the
+# normalised ocean state has a wide dynamic range (deep velocities are tiny).
+# Supported on Ampere and later, which covers every dc-gpu card.
+precision: bf16-mixed
+
+# Per-GPU batch.  NOT ${module.batch_size}: see the block at the top of this
+# file.  The presets are sized for 96 GB GH200s and dc-gpu is a 40 GB A100, so
+# inheriting the preset put the quickstart into an OOM.  Each preset now carries
+# a SECOND, measured-here number and this reads that one, so the choice stays
+# per-preset -- `tiny` 4, `small` 2, `base` 1 -- instead of one value that fits
+# only the smallest.
+batch_size: ${module.batch_size_40gib}
+
+# Dataloader workers, per process. The project convention on JURECA is
+# --cpus-per-task=12, so 8 leaves room for the main process. On JUPITER 16
+# workers delivered 53 samples/s against the greediest preset's 24.1 samples/s,
+# i.e. several times what the measurement needed; 8 should still be ample, and
+# `make benchmark` will show you if the data tax is real here.
+cpus: 8

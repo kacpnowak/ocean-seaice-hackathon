@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO / "scripts"))
 
 import compute_stats  # noqa: E402
 import prepare_glorys  # noqa: E402
@@ -163,3 +164,87 @@ def test_the_shipped_statistics_record_how_deeply_they_were_sampled():
     read = provenance.read_statistics_provenance()
     assert read.known and not read.unreadable
     assert read.stats_sampled == (stats["sampling"] == "sampled")
+
+
+def test_the_scripts_take_the_grid_from_variables_and_not_from_a_hardcoded_arange():
+    """The 0.25-degree experiment in docs/07 3a starts by changing `N_LAT`, `N_LON`,
+    `LAT` and `LON` in variables.py, and docs claimed that was the only edit
+    preparation needed. It was not: both scripts wrote their coordinate VALUES
+    from `np.arange(-89.5, 90.0, 1.0)` while taking their array SHAPES from
+    `N_LAT`/`N_LON`, so a changed grid died inside netCDF4 and numpy with
+
+        ValueError: shape mismatch ... arg 0 with shape (720,) and arg 1 with shape (180,)
+        ValueError: operands could not be broadcast together ... (180,1) and (720,1440)
+
+    MUTANT: putting either `np.arange` back fails this, because the hardcoded
+    axis agrees with `LAT`/`LON` in length only at 1 degree.
+    """
+    for script in (Path("scripts/prepare_glorys.py"), Path("scripts/compute_stats.py")):
+        text = (_REPO / script).read_text()
+        assert "np.arange(-89.5" not in text, f"{script} hardcodes the 1-degree latitude"
+        assert "np.arange(0.0, 360.0" not in text, f"{script} hardcodes the 1-degree longitude"
+
+    # And the axes they do write are the ones variables.py defines.
+    from oceanarches.dataloaders import variables
+
+    assert len(variables.LAT) == variables.N_LAT
+    assert len(variables.LON) == variables.N_LON
+
+
+def test_the_prepared_files_describe_the_grid_they_actually_have():
+    """`title` and `source` used to be the literal strings "regridded to 1 degree"
+    and "cdo remap,r360x180". At 0.25 degrees the output then claimed to be
+    1-degree data, which is exactly the sort of thing a later reader trusts.
+
+    MUTANT: hardcoding either string back fails this at any non-1-degree grid.
+    """
+    text = (_REPO / "scripts" / "prepare_glorys.py").read_text()
+    assert 'out.title = "GLORYS12V1 daily means, regridded to 1 degree' not in text
+    assert 'out.source = "MERCATOR GLORYS12V1 via cdo remap,r360x180"' not in text
+    assert "remap,r{N_LON}x{N_LAT}" in text, "the source string must follow the grid"
+
+
+def test_the_benchmark_records_an_out_of_memory_instead_of_aborting_the_sweep():
+    """Measured on JURECA: `make benchmark` measured `tiny`, hit an OOM on `small`,
+    and the traceback that followed printed NO table -- so the one command whose
+    job is to answer "what batch size fits on this card" answered nothing, and
+    threw away the preset it had already measured.
+
+    MUTANT: removing the `except` around the `benchmark` call, or the `continue`,
+    fails this.
+    """
+    text = (_REPO / "scripts" / "benchmark_step.py").read_text()
+    assert "oomed[preset] = batch" in text, "the failure has to be recorded, not just survived"
+
+    # An OOM does not always arrive as `torch.OutOfMemoryError`, and a wrong
+    # `tensor_size` at 0.25 degrees raises `AssertionError` -- which must NOT be
+    # swallowed as "does not fit", or a config bug looks like a memory limit.
+    import benchmark_step
+
+    class OutOfMemoryError(RuntimeError):
+        pass
+
+    assert benchmark_step._is_oom(OutOfMemoryError("boom"))
+    assert benchmark_step._is_oom(RuntimeError("CUDA out of memory. Tried to allocate 2 GiB"))
+    assert not benchmark_step._is_oom(RuntimeError("shapes do not match"))
+    assert not benchmark_step._is_oom(AssertionError("input feature has wrong size"))
+
+    # The cache must be emptied OUTSIDE the except block: the exception's
+    # traceback holds the frame that holds the tensors that just failed to fit,
+    # so freeing while it is alive frees nothing and the next preset OOMs too.
+    body = text[text.index("for preset in args.presets:") :]
+    except_at = body.index("except (torch.OutOfMemoryError, RuntimeError)")
+    gc_at = body.index("gc.collect()")
+    assert gc_at > except_at, "gc.collect() must come after the except block"
+    assert "if not fitted:" in body, "the cleanup is deliberately outside the handler"
+
+
+def test_the_benchmark_can_be_given_extra_hydra_overrides():
+    """`build_cfg` always accepted them and nothing exposed them, which made the
+    0.25-degree patch-size comparison in docs/07 3a a code edit rather than a flag.
+
+    MUTANT: dropping `args.override` from either `build_cfg` call fails this.
+    """
+    text = (_REPO / "scripts" / "benchmark_step.py").read_text()
+    assert '"--override"' in text
+    assert text.count("args.override") >= 2, "both build_cfg call sites must pass it"

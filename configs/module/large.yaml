@@ -21,6 +21,14 @@ n_depths: 13
 # configs/module/tiny.yaml. From the batch sweep: batch 2 does not fit.
 batch_size: 1
 
+# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
+# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
+# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
+# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
+# working.  Measured with `make benchmark` on a dc-gpu A100: does NOT fit at all -- OOM at batch 1 even with gradient_checkpointing.
+# From the batch sweep: nothing fits: the GH200 measurement is 50.81 GiB against 39.5 available.
+batch_size_40gib: 1
+
 # Wall clock, and be careful which number this is.
 #   * compute only, `make benchmark`:      0.542 s/step
 #   * a REAL training step, measured on
@@ -54,7 +62,8 @@ batch_size: 1
 # the same data in 16.0 h instead of 58.7 h, rather than 4.8 M samples (506
 # epochs) in 64.1 h. `num_training_steps: ${max_steps}` below makes the cosine
 # schedule follow, so the shorter run is a complete schedule, not a truncated
-# one. The booster QOS caps one job at 12 h, so it is two jobs; see that script.
+# one. JUPITER's booster QOS capped one job at 12 h, so it was two jobs; see that
+# script, and check dc-gpu's own cap on JURECA before assuming the same split.
 max_steps: 300000
 save_step_frequency: 25000
 limit_val_batches: 64

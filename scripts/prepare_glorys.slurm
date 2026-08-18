@@ -10,14 +10,14 @@
 #
 # The account and partition below are the defaults from config.env.  SBATCH
 # directives cannot read that file, so override on the command line if needed:
-#   sbatch -A weatherai -p booster scripts/prepare_glorys.slurm
+#   sbatch -A training2635 -p dc-gpu scripts/prepare_glorys.slurm
 # ---------------------------------------------------------------------------
 #SBATCH --job-name=glorys-prep
-#SBATCH --account=hclimrep
-#SBATCH --partition=booster
+#SBATCH --account=training2635
+#SBATCH --partition=dc-gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:1
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/glorys-prep-%j.out
@@ -35,8 +35,8 @@ source config.env
 
 # Override the account/partition from config.env if SLURM did not get them from
 # the sbatch command line.
-: "${SLURM_ACCOUNT:=hclimrep}"
-: "${SLURM_PARTITION:=booster}"
+: "${SLURM_ACCOUNT:=training2635}"
+: "${SLURM_PARTITION:=dc-gpu}"
 
 echo "host      : $(hostname)"
 echo "raw       : ${GLORYS_RAW}"

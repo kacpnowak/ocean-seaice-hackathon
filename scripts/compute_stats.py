@@ -54,7 +54,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from oceanarches import paths  # noqa: E402
 from oceanarches.dataloaders.variables import (  # noqa: E402
+    LAT,
     LEVEL_VARIABLES,
+    LON,
     N_LAT,
     N_LON,
     NAN_MEANS_ZERO,
@@ -284,8 +286,15 @@ def compute_masks(files: list[Path], n_check: int) -> xr.Dataset:
             )
 
     # --- static fields handed to the network as extra input channels ---------
-    lat = np.arange(-89.5, 90.0, 1.0, dtype="f4")
-    lon = np.arange(0.0, 360.0, 1.0, dtype="f4")
+    # From variables.py, NOT a hardcoded 1-degree arange -- the same trap as in
+    # scripts/prepare_glorys.py.  These become the sin/cos lat and lon input
+    # channels, so a stale axis here would feed the network the wrong geometry
+    # rather than fail; at a changed N_LAT it fails instead, which is how it was
+    # found:
+    #     ValueError: operands could not be broadcast together ... (180,1) and
+    #     requested shape (720,1440)
+    lat = np.array(LAT, dtype="f4")
+    lon = np.array(LON, dtype="f4")
     lat2d = np.broadcast_to(lat[:, None], (N_LAT, N_LON))
     lon2d = np.broadcast_to(lon[None, :], (N_LAT, N_LON))
 

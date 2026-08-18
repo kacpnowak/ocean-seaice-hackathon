@@ -20,6 +20,14 @@ n_depths: 13
 # sweep: batch 8 reaches 83.8 GiB -- too close to the edge for a four-hour run.
 batch_size: 4
 
+# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
+# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
+# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
+# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
+# working.  Measured with `make benchmark` on a dc-gpu A100: 21.43 GiB peak, 0.307 s/step.
+# From the batch sweep: batch 4 does not fit.
+batch_size_40gib: 2
+
 # Wall clock, and mind which number this is.
 #   * compute only, `make benchmark`:            0.302 s/step
 #   * a REAL training step, measured on

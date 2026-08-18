@@ -41,7 +41,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from oceanarches import paths  # noqa: E402
 from oceanarches.dataloaders.variables import (  # noqa: E402
+    LAT,
     LEVEL_VARIABLES,
+    LON,
     N_LAT,
     N_LON,
     PREPPED_DEPTH_INDICES,
@@ -161,12 +163,20 @@ def create_output(path: Path, dates: list[date], complevel: int) -> Dataset:
     lat_var = out.createVariable("lat", "f4", ("lat",))
     lat_var.units = "degrees_north"
     lat_var.standard_name = "latitude"
-    lat_var[:] = np.arange(-89.5, 90.0, 1.0, dtype="f4")
+    # From variables.py, NOT a hardcoded arange.  variables.py is the single
+    # source of truth for the grid, and this script already takes N_LAT/N_LON
+    # from it for the dimensions -- taking the coordinate VALUES from somewhere
+    # else meant that changing the grid constants (which is step one of the
+    # 0.25-degree experiment in docs/07) produced
+    #     ValueError: shape mismatch ... arg 0 with shape (720,) and arg 1 with
+    #     shape (180,)
+    # from netCDF4, several layers below anything that mentions a grid.
+    lat_var[:] = np.array(LAT, dtype="f4")
 
     lon_var = out.createVariable("lon", "f4", ("lon",))
     lon_var.units = "degrees_east"
     lon_var.standard_name = "longitude"
-    lon_var[:] = np.arange(0.0, 360.0, 1.0, dtype="f4")
+    lon_var[:] = np.array(LON, dtype="f4")
 
     # Chunk one (day) or one (day, level) slab at a time: that is exactly the
     # access pattern of the dataloader, so no read ever decompresses more than
@@ -189,8 +199,11 @@ def create_output(path: Path, dates: list[date], complevel: int) -> Dataset:
         var.long_name = VARIABLES[name].long_name
         var.units = VARIABLES[name].units
 
-    out.title = "GLORYS12V1 daily means, regridded to 1 degree, depth-subset"
-    out.source = "MERCATOR GLORYS12V1 via cdo remap,r360x180"
+    # Derived, so a re-gridded archive does not inherit a title claiming it is
+    # 1 degree.  `resolution` is read off the axis rather than assumed.
+    step = (LAT[1] - LAT[0]) if N_LAT > 1 else 0.0
+    out.title = f"GLORYS12V1 daily means, regridded to {step:g} degree, depth-subset"
+    out.source = f"MERCATOR GLORYS12V1 via cdo remap,r{N_LON}x{N_LAT}"
     out.comment = (
         "Prepared for the AI Ocean & Sea-Ice hackathon challenge. "
         "Missing values are kept as NaN on purpose -- masking is part of the task."

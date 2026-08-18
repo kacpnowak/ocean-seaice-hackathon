@@ -435,8 +435,22 @@ want that, you have to copy the weights layer by layer yourself.
 Everything above is a command line you type inside an `srun`. For the two long
 jobs there are batch scripts, so you can submit them and go away.
 
+**On JURECA, the `large` line below does not run.** `large` was measured at
+50.81 GiB at batch 1 with `gradient_checkpointing: True` already on, and a dc-gpu
+A100 has 39.5 GiB. It dies on its first optimiser step with an out-of-memory
+error, and the guard now says so in as many words rather than advising you to
+halve a batch that is already 1. Four GPUs do not fix it either: Lightning runs
+DDP, which replicates the whole model on every rank, so per-rank memory is
+unchanged. Sharding (FSDP/ZeRO-3) would recover only a few GiB, because what does
+not fit is the activations and those are per-rank whatever you shard.
+
+**`large_pretrained` is still fully usable on one A100 -- for inference.**
+`make eval NAME=large_pretrained` has no optimiser state and no stored
+activations and fits comfortably; that is tested. Fine-tune `base` or smaller, or
+find a bigger card.
+
 ```bash
-# THE MAIN PATH: fine-tune the pre-trained `large` model on one GPU.
+# THE MAIN PATH ON A 96 GB GH200 -- see the note above, it OOMs on a 40 GiB A100.
 # MODULE=large is not optional -- it must be the preset FROM was trained with.
 sbatch --export=ALL,FROM=large_pretrained,MODULE=large,NAME=my_finetune \
     scripts/finetune.slurm
@@ -531,8 +545,10 @@ but this allocation has 2 node(s). Either submit with --nodes=4, or pick the
 cluster config that matches the allocation ...
 ```
 
-**The job is much shorter than the run.** The booster QOS caps a single job at
-twelve hours:
+**The job is much shorter than the run.** On JUPITER, where this was run, the
+booster QOS capped a single job at twelve hours -- **check the equivalent for
+`dc-gpu` on JURECA before planning launches**, because none of the numbers in
+this section were re-measured after the move:
 
 ```
 $ sacctmgr show qos part_booster format=Name,MaxWall

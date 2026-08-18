@@ -281,7 +281,7 @@ def test_the_shipped_step_budget_is_checkpointable_at_every_node_count_it_suppor
     """
     budget = _shell_default("SAMPLE_BUDGET")
     save_every = _shell_default("SAVE_EVERY")
-    for ranks in (4, 8, 16):  # 1, 2 and 4 booster nodes
+    for ranks in (4, 8, 16):  # 1, 2 and 4 nodes at 4 GPUs each
         max_steps = budget // ranks
         assert budget % ranks == 0, f"{budget} samples does not divide over {ranks} ranks"
         assert max_steps % save_every == 0, (

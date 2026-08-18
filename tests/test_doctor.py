@@ -15,6 +15,7 @@ import pytest
 import torch
 import xarray as xr
 
+from oceanarches import doctor
 from oceanarches.dataloaders.variables import (
     LEVEL_VARIABLES,
     N_LAT,
@@ -272,3 +273,91 @@ def test_a_missing_forcing_archive_warns_rather_than_fails(tmp_path, monkeypatch
     statuses = {name: status for status, name, *_ in report.rows}
     assert statuses["IFS forcing"] == doctor.WARN
     assert not any(status == doctor.FAIL for status, *_ in report.rows)
+
+
+# ---------------------------------------------------------------------------
+# config.env is written for bash, and every line in it carries a comment
+# ---------------------------------------------------------------------------
+def test_a_trailing_comment_is_not_part_of_the_value(tmp_path, monkeypatch):
+    """Measured on the shipped file itself: `SLURM_ACCOUNT="training2635"  # ...`
+    read back as `training2635"    # JUPITER was: hclimrep`.
+
+    Nothing reads those two keys through this module, so it stayed invisible --
+    but the same annotation on a path (`GLORYS_PREPPED="/my/copy"  # mine`) hands
+    back a directory nobody typed, and the error names that directory rather than
+    the comment that created it.
+
+    MUTANT: dropping the `_value()` call from `_config_env` fails every case here.
+    """
+    from oceanarches import paths
+
+    env = tmp_path / "config.env"
+    env.write_text(
+        'GLORYS_PREPPED="/data/prepped"   # the copied 92 GB\n'
+        "SLURM_ACCOUNT=training2635       # unquoted, with a comment\n"
+        'SLURM_PARTITION="dc-gpu"\n'
+        "EVALSTORE=evalstore\n"
+        "# a whole-line comment\n"
+        'ODD_PATH="/data/a#b"             # a hash inside quotes is literal\n'
+        "BARE_HASH=/data/c#d              # and outside them, with no space, too\n"
+    )
+    monkeypatch.setattr(paths, "CONFIG_ENV", env)
+    paths._config_env.cache_clear()
+    try:
+        assert paths.setting("GLORYS_PREPPED") == "/data/prepped"
+        assert paths.setting("SLURM_ACCOUNT") == "training2635"
+        assert paths.setting("SLURM_PARTITION") == "dc-gpu"
+        assert paths.setting("EVALSTORE") == "evalstore"
+        assert paths.setting("ODD_PATH") == "/data/a#b"
+        assert paths.setting("BARE_HASH") == "/data/c#d"
+    finally:
+        paths._config_env.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# $HOME's inode quota, which is what actually stops `make setup` on JURECA
+# ---------------------------------------------------------------------------
+def test_the_inode_probe_counts_what_it_could_create(tmp_path, monkeypatch):
+    """No portable way to READ an inode quota exists here -- `quota`, `lfs` and
+    `jutil ... quota` are all absent on the JURECA login nodes and `df` reports the
+    filesystem's terabytes rather than the user's file count -- so doctor measures
+    it by creating files until it cannot.
+
+    On a directory with no quota it must return the ceiling and clean up after
+    itself.
+    """
+    probe = tmp_path / "probe"
+    assert doctor._home_inodes_left(probe, ceiling=25) == 25
+    assert not probe.exists(), "the probe must not leave its files behind"
+
+
+def test_a_nearly_full_home_fails_the_doctor_and_says_inodes(monkeypatch):
+    """Measured on JURECA: ~2050 files total, ~480 already used, and `make setup`
+    died unpacking CPython with `Disk quota exceeded (os error 122)` -- a message
+    that names neither $HOME nor inodes.
+
+    MUTANT: reporting PASS regardless of the headroom fails this; so does dropping
+    the word "INODE" from the message, which is the only part that tells a
+    participant why `df` disagrees.
+    """
+    monkeypatch.setattr(doctor, "_home_inodes_left", lambda *a, **k: 3)
+    report = doctor.Report()
+    doctor._check_home_quota(report)
+    (status, name, detail, fix) = report.rows[0][:4]
+    assert status == doctor.FAIL
+    assert "INODE" in detail and "df" in detail
+    assert "$HOME" in fix or "cache" in fix.lower()
+
+
+def test_a_roomy_home_passes(monkeypatch):
+    monkeypatch.setattr(doctor, "_home_inodes_left", lambda *a, **k: 600)
+    report = doctor.Report()
+    doctor._check_home_quota(report)
+    assert report.rows[0][0] == doctor.PASS
+
+
+def test_an_unprobeable_home_warns_rather_than_guessing(monkeypatch):
+    monkeypatch.setattr(doctor, "_home_inodes_left", lambda *a, **k: None)
+    report = doctor.Report()
+    doctor._check_home_quota(report)
+    assert report.rows[0][0] == doctor.WARN

@@ -90,18 +90,24 @@ __all__ = [
 ]
 
 #: The allocation every GPU target in this kit needs.  Quoted verbatim from
-#: configs/cluster/jupiter_1gpu.yaml, including the two flags that are not
-#: optional there (`--ntasks=1`, and `CUDA_VISIBLE_DEVICES=0` because the booster
-#: hands back all four cards whatever you asked for).
+#: configs/cluster/jureca_1gpu.yaml, including `--ntasks=1`, which is not
+#: optional: without it `--cpus-per-task=N` launches N concurrent copies of your
+#: script.
+#:
+#: `CUDA_VISIBLE_DEVICES=0` is NOT here, and was on JUPITER, where the booster
+#: partition allocates whole nodes and handed back all four cards whatever you
+#: asked for. dc-gpu is not whole-node, so `--gres=gpu:1` should really give one.
+#: Check the batch count in epoch 0 the first time anyway: if Lightning sees more
+#: than one device it shards the data across them inside your single process, and
+#: the loss curve looks perfectly normal while you train on a fraction of it.
 SRUN_LINES = (
-    "srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \\",
-    "     --cpus-per-task=16 --time=01:00:00 --pty bash",
-    "export CUDA_VISIBLE_DEVICES=0",
+    "srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \\",
+    "     --cpus-per-task=12 --time=01:00:00 --pty bash",
 )
 #: The same thing on one line, for `make doctor`, whose fix column is one line.
 SRUN_ONE_LINE = (
-    "srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 "
-    "--cpus-per-task=16 --time=01:00:00 --pty bash  (then: export CUDA_VISIBLE_DEVICES=0)"
+    "srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 "
+    "--cpus-per-task=12 --time=01:00:00 --pty bash"
 )
 
 
@@ -1190,13 +1196,24 @@ def release_run_lock(path: str | Path | None) -> None:
 # ---------------------------------------------------------------------------
 # 8. The error PyTorch reports, and the fix this kit actually has
 # ---------------------------------------------------------------------------
-def oom_advice(error: BaseException, batch_size: Any = None, preset: str = "?") -> str | None:
+def oom_advice(
+    error: BaseException,
+    batch_size: Any = None,
+    preset: str = "?",
+    gradient_checkpointing: Any = None,
+) -> str | None:
     """Translate a CUDA out-of-memory death into the knob that causes it here.
 
     `++batch_size=64` died with PyTorch's stock suggestion -- set
     `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` -- which is about
     fragmentation and is not what an eight-fold batch is.  Returns None for every
     other failure, so an unrelated crash is never dressed up as an OOM.
+
+    At `batch_size` 1 there is nothing left to halve, and this used to advise
+    `++batch_size=1` -- the value that had just failed.  That is the case a
+    `large` fine-tune on a 40 GiB card hits on its first step, so it gets its own
+    message: with the batch already at 1 and checkpointing already on, the preset
+    does not fit the card and no override will change that.
     """
     text = str(error)
     is_oom = type(error).__name__ in ("OutOfMemoryError", "CudaOutOfMemoryError") or (
@@ -1205,24 +1222,55 @@ def oom_advice(error: BaseException, batch_size: Any = None, preset: str = "?") 
     if not is_oom:
         return None
     try:
-        smaller = max(1, int(batch_size) // 2)
-        asked = f"{int(batch_size)}"
+        batch = int(batch_size)
+        asked = f"{batch}"
     except (TypeError, ValueError):
-        smaller, asked = 4, "?"
+        batch, asked = 0, "?"
+
+    tail = (
+        "\n"
+        "    PyTorch's own suggestion above (PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True)\n"
+        "    is about fragmentation. It will not fit a batch that does not fit."
+    )
+
+    if batch == 1 and gradient_checkpointing:
+        # Nothing left: both levers are already at their limit.
+        return (
+            "the GPU ran out of memory, and there is no override that fixes it.\n"
+            "\n"
+            f"      you ran with   batch_size 1 and gradient_checkpointing=True (module={preset})\n"
+            "      which means     both memory levers this kit has are already at their limit\n"
+            "\n"
+            f"    `{preset}` does not fit this card. What does work:\n"
+            "      * a smaller preset -- `make benchmark` prints what fits, and records a\n"
+            "        preset that does not as a result rather than dying on it\n"
+            "      * INFERENCE still fits where training does not: no optimiser state and no\n"
+            "        stored activations. `make eval NAME=<run>` on a pre-trained checkpoint\n"
+            "        works on cards that cannot train it\n"
+            "      * a card with more memory. Note that more GPUs is NOT the same thing:\n"
+            "        Lightning's DDP replicates the model per rank, so per-rank memory is\n"
+            "        unchanged\n" + tail
+        )
+
+    smaller = max(1, batch // 2) if batch else 4
+    lever = (
+        f'      halve it       HYDRA_ARGS="++batch_size={smaller}"\n' if smaller != batch else ""
+    )
+    ckpt = (
+        "      then           ++module.backbone.gradient_checkpointing=True   (slower, much "
+        "less memory)\n"
+        if not gradient_checkpointing
+        else "      note           gradient_checkpointing is already on for this preset\n"
+    )
     return (
         "the GPU ran out of memory. In this kit that is `batch_size`, not the allocator.\n"
         "\n"
         f"      you ran with   batch_size {asked}   (module={preset} ships the batch size it "
         "was sized for)\n"
-        f'      halve it       HYDRA_ARGS="++batch_size={smaller}"\n'
-        "      then           ++module.backbone.gradient_checkpointing=True   (slower, much "
-        "less memory)\n"
-        "      measure first  make benchmark   -- peak memory of every preset, before you "
-        "queue for a GPU\n"
-        "\n"
-        "    PyTorch's own suggestion above (PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True)\n"
-        "    is about fragmentation. It will not fit a batch that does not fit.\n"
-        "    `tiny` at its shipped batch_size 8 already peaks at 42.6 GiB of 96."
+        + lever
+        + ckpt
+        + "      measure first  make benchmark   -- peak memory of every preset, before you "
+        "queue for a GPU\n" + tail
     )
 
 
@@ -1369,9 +1417,23 @@ class StartupGuard(Callback):
                 error,
                 OmegaConf.select(config, "batch_size"),
                 str(choices.get("module", "?")),
+                OmegaConf.select(config, "module.backbone.gradient_checkpointing"),
             )
             if advice is not None:
-                _emit(["", _RULE, f"FATAL: {advice}", _RULE, ""])
+                block = ["", _RULE, f"FATAL: {advice}", _RULE, ""]
+                _emit(block)
+                # And again as the very last thing the process prints.  hydra
+                # calls this callback BEFORE it renders the failure, so on a
+                # 227-line log the advice landed at line 60 and PyTorch's own
+                # "try expandable_segments" -- the message this block exists to
+                # contradict -- was the last line on screen.  Everyone reads the
+                # tail of a failed log, so the tail has to carry it.
+                #
+                # Not under pytest: the tests drive this hook with a synthesised
+                # OOM, and an atexit handler would print the block after the test
+                # summary, where it reads as a real failure of the test run.
+                if "PYTEST_CURRENT_TEST" not in os.environ:
+                    atexit.register(_emit, block)
         release_run_lock(self.lock)
         self.lock = None
 

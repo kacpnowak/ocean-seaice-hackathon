@@ -285,7 +285,7 @@ property that will bite you if nobody tells you about it.
 
 ### What the shipped archive actually is
 
-`IFS_FORCING` is `/e/data1/climateai/hclimrep/data/glorys_forcings/ifs_1deg`:
+`IFS_FORCING` is `/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice/data/ifs_1deg`:
 52 weekly files, 1.1 GB, already on our exact 180x360 grid (lat -89.5..89.5
 ascending, lon 0..359), so no regridding.
 

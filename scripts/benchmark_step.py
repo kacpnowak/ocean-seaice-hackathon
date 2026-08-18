@@ -9,7 +9,7 @@ whole pipeline depends on -- in particular the surface-only component, which is
 the configuration most likely to break.
 
     # everything, on one GH200
-    srun --account=hclimrep --partition=booster --gres=gpu:1 --time=00:30:00 --pty \
+    srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --time=00:30:00 --pty \
         .venv/bin/python scripts/benchmark_step.py
 
     # just the 30-minute model, including real data loading
@@ -22,6 +22,7 @@ is then meaningless and is left blank.
 from __future__ import annotations
 
 import argparse
+import gc
 import sys
 import time
 from pathlib import Path
@@ -89,6 +90,21 @@ def parameter_counts(embedder, backbone) -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
+def _is_oom(exc: BaseException) -> bool:
+    """Whether this exception is a CUDA out-of-memory, however it was raised."""
+    return type(exc).__name__ in ("OutOfMemoryError", "CudaOutOfMemoryError") or (
+        "CUDA out of memory" in str(exc) or "CUDA error: out of memory" in str(exc)
+    )
+
+
+def _empty_cache(device) -> None:
+    """Hand the allocator's cached blocks back before measuring the next preset."""
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+
+
 def benchmark(cfg, batch: int, steps: int, warmup: int, device, dtype) -> dict:
     """One preset: params, seconds per training step, peak memory."""
     embedder = instantiate(cfg.module.embedder).to(device)
@@ -281,7 +297,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--presets", nargs="+", default=PRESETS, choices=PRESETS)
     parser.add_argument("--dataloader", default="glorys")
-    parser.add_argument("--cluster", default="jupiter_1gpu")
+    parser.add_argument("--cluster", default="jureca_1gpu")
     parser.add_argument("--batch-size", type=int, default=None, help="default: cluster.batch_size")
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--warmup", type=int, default=5)
@@ -294,6 +310,16 @@ def main() -> int:
     parser.add_argument("--data-dataloader", default="glorys_tiny")
     parser.add_argument("--target-minutes", type=float, default=30.0)
     parser.add_argument("--skip-checks", action="store_true")
+    # `build_cfg` has always accepted extra hydra overrides; nothing exposed them.
+    # The 0.25-degree experiment in docs/07 3a turns on comparing two patch sizes
+    # at the same grid, which is one override and was otherwise a code edit.
+    parser.add_argument(
+        "--override",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="extra hydra override, repeatable: --override ++module.embedder.patch_size=[2,12,12]",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -306,16 +332,53 @@ def main() -> int:
         print("  (no GPU: step times are not representative, memory is not measured)")
     torch.set_float32_matmul_precision("medium")
 
+    # A preset that does not fit is the single most likely outcome of this script
+    # on a card smaller than the one the presets were sized for, and it is the
+    # reason to run it at all.  So an OOM is a RESULT for that preset, not the end
+    # of the sweep: it is recorded, the allocator is emptied, and the next preset
+    # is measured.  Letting it propagate threw away every preset already measured
+    # -- on JURECA `tiny` was measured, `small` OOMed, and the traceback that
+    # followed printed no table at all, so the one command that answers "what
+    # batch size fits here" answered nothing.
     results = {}
+    oomed: dict[str, int] = {}
     for preset in args.presets:
-        cfg = build_cfg(preset, args.dataloader, args.cluster)
+        cfg = build_cfg(preset, args.dataloader, args.cluster, args.override)
         batch = args.batch_size or cfg.cluster.batch_size
         dtype = PRECISIONS[cfg.cluster.precision]
-        results[preset] = benchmark(cfg, batch, args.steps, args.warmup, device, dtype)
+        try:
+            results[preset] = benchmark(cfg, batch, args.steps, args.warmup, device, dtype)
+        except (torch.OutOfMemoryError, RuntimeError) as exc:
+            # `RuntimeError` as well as the typed error, and the text checked:
+            # an OOM does not always arrive as `torch.OutOfMemoryError`, which is
+            # the same lesson `oceanarches.guards.oom_advice` encodes. Anything
+            # else is re-raised, so a real bug is never reported as "does not fit".
+            if not _is_oom(exc):
+                raise
+            oomed[preset] = batch
+            print(f"  OOM      {preset} at batch {batch} -- does not fit here", flush=True)
+            fitted = False
+        else:
+            fitted = True
+        if not fitted:
+            # OUTSIDE the `except` block on purpose.  The exception's traceback
+            # holds `benchmark`'s frame, which holds the model, the optimiser
+            # state and the activations that just failed to fit; while that
+            # reference lives, `empty_cache()` has nothing to hand back and the
+            # next preset OOMs too.  Leaving the block drops the traceback, and
+            # gc.collect() drops the reference cycles the frame leaves behind.
+            gc.collect()
+            _empty_cache(device)
+            continue
         results[preset]["batch"] = batch
         results[preset]["max_steps"] = cfg.module.max_steps
         results[preset]["precision"] = cfg.cluster.precision
         print(f"  measured {preset}", flush=True)
+        # Between presets, not just after a failure: the peak memory reported for
+        # preset N+1 is otherwise inflated by whatever N left cached, and on a
+        # card this full that turns a fitting preset into a spurious OOM.
+        gc.collect()
+        _empty_cache(device)
 
     print(f"\n{args.dataloader}, cluster={args.cluster}")
     print("=" * 112)
@@ -347,13 +410,35 @@ def main() -> int:
     print("params = embedder + backbone; s/step = median forward+backward+optimiser,")
     print("compute only (no data loading); wall clock = s/step x the preset's max_steps.")
 
+    if oomed:
+        total = (
+            torch.cuda.get_device_properties(0).total_memory / 2**30
+            if device.type == "cuda"
+            else 0.0
+        )
+        print()
+        for preset, batch in oomed.items():
+            print(f"{preset}: OUT OF MEMORY at batch {batch} on this card ({total:.0f} GiB).")
+        print("Peak memory is close to linear in the batch, so halve it and measure again:")
+        names = " ".join(oomed)
+        halved = min(max(1, b // 2) for b in oomed.values())
+        print(f'    make benchmark BENCH_ARGS="--presets {names} --batch-size {halved}"')
+        print("If batch 1 still will not fit, the preset needs gradient checkpointing:")
+        print("    ++module.backbone.gradient_checkpointing=True")
+
+    if not results:
+        print()
+        print("Nothing fitted, so there is no table above. That IS the measurement:")
+        print("every preset asked for more memory than this card has. Retry at a")
+        print("smaller batch with the command just printed.")
+
     for preset, r in results.items():
         print(f"\n{preset}: in surface {r['in_surface']} level {r['in_level']}")
         for key, shape in r["shapes"].items():
             print(f"    {key:12s} {shape}")
 
     if args.data:
-        cfg = build_cfg(args.data_preset, args.data_dataloader, args.cluster)
+        cfg = build_cfg(args.data_preset, args.data_dataloader, args.cluster, args.override)
         batch = args.batch_size or cfg.cluster.batch_size
         dtype = PRECISIONS[cfg.cluster.precision]
         print(

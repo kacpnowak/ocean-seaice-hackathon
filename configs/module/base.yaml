@@ -29,6 +29,14 @@ n_depths: 13
 # batch wins -- more optimiser steps for the same data, and room for validation.
 batch_size: 2
 
+# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
+# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
+# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
+# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
+# working.  Measured with `make benchmark` on a dc-gpu A100: 21.33 GiB peak, 0.322 s/step.
+# From the batch sweep: batch 2 does not fit.
+batch_size_40gib: 1
+
 # Wall clock, and mind which number this is.
 #   * compute only, `make benchmark`:            0.328 s/step
 #   * a REAL training step, measured on

@@ -7,11 +7,96 @@ answer to each failure we have already seen somebody hit.
 
 ---
 
+## 0. This kit was moved from JUPITER, and not all of it is verified here
+
+Everything below was built, measured and run on **JUPITER**. It now lives on
+**JURECA**, under `/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice`,
+because JUPITER's `/e/scratch` and `/e/data1` are that machine's Exascale
+filesystems and are not mounted here.
+
+**What came across**
+
+| | |
+|---|---|
+| prepared GLORYS, 1993--2025 | 92 GB, `data/glorys_1deg_prepped/` |
+| IFS forcing (optional, ~2024) | 833 MB, `data/ifs_1deg/` |
+| masks, normalisation, climatology | 94 MB, `oceanarches/stats/` |
+| the five shipped runs | 7.2 GB, `modelstore/` |
+| the `large` scorecard | 679 MB, `evalstore/large_pretrained/` |
+| the repository, with history and the `public` release branch | `git log` |
+
+**What deliberately did not, and why**
+
+* **`.venv`** -- JUPITER is aarch64, JURECA is x86_64. Those wheels cannot run
+  here. Build it with `make setup`.
+* **The raw GLORYS archive** (640 GB) -- only `make prep-data` reads it, and the
+  92 GB it produces came across ready to use. `make doctor` reports this as a
+  WARN, not a FAIL, for exactly that reason.
+* **Most of the 0.25-degree archive** (~10 TB, 292 GB/year). **Three years are
+  staged** for [docs/07 question 3](07_challenge_ideas.md), raw and unprepared,
+  at `/p/scratch/training2635/4_ocean_ai/nowak2/glorys_025/{2017,2018,2019}` --
+  876 GB. Consecutive, and chosen against `SPLIT_YEARS`: 2017--2018 are training
+  years and 2019 is the validation year, which is also exactly `tiny_val`, so
+  `dataloader=glorys_tiny` works on them unedited. There is **no test year** in a
+  run of three (`test` starts at 2021), so that question scores with
+  `--domain val`. Another year is 292 GB and about eight minutes:
+
+  ```bash
+  rsync -a /e/data1/climateai/hclimrep/data/glorys_025/2020 \
+      /p/scratch/training2635/4_ocean_ai/nowak2/glorys_025/     # from JUPITER
+  ```
+* **Fourteen of the fifteen `large` checkpoints** (72 GB) -- `load_module` takes
+  the newest, so only `checkpoint_global_step=75000.ckpt` shipped.
+* **The diverged `lr 2e-4` run** (47 GB) -- failure evidence, it stays on JUPITER.
+
+**What was changed for JURECA:** the account (`training2635`), the partition
+(`dc-gpu`), `--cpus-per-task` (12), every path, three new
+`configs/cluster/jureca_*.yaml`, the `CLUSTER` default, and the raw-data check in
+`make doctor`. The account, partition and core count are not guesses -- they are
+what the other training2635 challenges already run.
+
+### What has NOT been verified on JURECA
+
+The move was made from a JUPITER login node, which has no access to JURECA, so
+**nothing in this kit has ever been executed on JURECA.** Specifically:
+
+1. **The environment has never been built here.** `make setup` pulls x86_64
+   CUDA wheels it has never pulled on this machine.
+2. **The test suite has never run on x86_64.**
+3. **`make doctor` has never run here** -- it is the fastest way to find out
+   what else is wrong, and it is the right first command.
+4. **No training, evaluation or fine-tune has ever run here.**
+5. **The batch sizes are wrong until proven otherwise.** Every `batch_size` in
+   `configs/module/*.yaml` was measured against a 96 GB GH200 -- `tiny` at
+   batch 8 peaked at 42.6 GiB there. JURECA's cards are smaller. **Run
+   `make benchmark` before queueing anything long**; it reports peak memory per
+   preset, and halving `batch_size` is the documented fix.
+6. **Every wall-clock figure in these documents is a GH200 measurement** -- "31
+   minutes for `tiny`", "18 hours for `large`", the `make setup` timing. They
+   were not rewritten, because inventing numbers is worse than labelling old
+   ones. Re-measure what you intend to quote to participants.
+
+The first hour on JURECA, in order:
+
+```bash
+cd /p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
+make setup                     # 1: builds the x86_64 .venv
+make doctor                    # 2: says what else is missing
+make test                      # 3: the suite, on this architecture
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=01:00:00 --pty bash
+make benchmark                 # 4: peak memory per preset -- the batch-size answer
+make eval NAME=large_pretrained EVAL_ARGS="--n-inits 2 --lead-days 2 --skip-animations"
+                               # 5: proves the shipped checkpoint loads and scores here
+```
+
+Only after 5 is the pre-trained model known to work on this machine.
+
 ## 1. Before day one
 
 | | | |
 |---|---|---|
-| ☐ | **Participants are in the `hclimrep` group** | **Only you can do this, and nothing works without it.** |
+| ☐ | **Participants are in the `training2635` group** | **Only you can do this, and nothing works without it.** |
 | ☑ | Prepared data, 92 GB, 1993--2025 | `data/glorys_1deg_prepped/` |
 | ☑ | Statistics, masks, climatology | `oceanarches/stats/` |
 | ☑ | Four small trained runs | `modelstore/{task6_tiny,ocean_tiny,seaice_tiny,seaice_isolated_tiny}` |
@@ -22,10 +107,11 @@ answer to each failure we have already seen somebody hit.
 ### The group is the whole gate
 
 ```
-/e/scratch/hclimrep   drwxrws---   root:hclimrep
+/p/scratch/training2635              drwxrws---   root:training2635
+/p/scratch/training2635/4_ocean_ai   drwxrwsr-x   patnala1:training2635
 ```
 
-Everything below it is world-readable, so **any member of `hclimrep` can read the
+Everything below it is world-readable, so **any member of `training2635` can read the
 kit, the data and the checkpoints, and a non-member can read none of it** -- not
 the clone, not the 92 GB of prepared data, not the statistics. There is no
 partial state and no useful error: a non-member gets `Permission denied` on the
@@ -34,7 +120,7 @@ partial state and no useful error: a non-member gets `Permission denied` on the
 Check the room against the group before the session, not during it:
 
 ```bash
-getent group hclimrep
+getent group training2635
 ```
 
 ---
@@ -45,7 +131,7 @@ There is no separate share. **This checkout is the shared store**, and
 [docs/01 §1.1](01_setup.md) sends participants straight at it:
 
 ```
-/e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice
+/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
 ```
 
 They `git clone` it (about 7 MB -- everything large is git-ignored), run
@@ -53,7 +139,7 @@ They `git clone` it (about 7 MB -- everything large is git-ignored), run
 in one by one**:
 
 ```bash
-SHARED=/e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice/modelstore
+SHARED=/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice/modelstore
 for run in large_pretrained task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
     ln -s $SHARED/$run modelstore/$run
 done

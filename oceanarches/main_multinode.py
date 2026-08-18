@@ -4,7 +4,7 @@ Use it exactly like `geoarches.main_hydra` -- same flags, same config groups,
 same `--config-path` rule::
 
     .venv/bin/python -m oceanarches.main_multinode --config-path $PWD/configs \\
-        cluster=jupiter_4nodes module=large dataloader=glorys ++name=large_pretrained
+        cluster=jureca_4nodes module=large dataloader=glorys ++name=large_pretrained
 
 ---------------------------------------------------------------------------
 Why this module exists
@@ -19,7 +19,7 @@ right and nothing here changes.  On more than one it is wrong, and Lightning
 says so rather than mistraining:
 
     $ srun --nodes=2 --ntasks-per-node=4 --gres=gpu:4 \\
-          .venv/bin/python -m geoarches.main_hydra ... cluster=jupiter_4gpu
+          .venv/bin/python -m geoarches.main_hydra ... cluster=jureca_4gpu
     ValueError: You set `num_nodes=1` in Lightning, but the number of nodes
     configured in SLURM `--nodes=2` does not match. HINT: Set `num_nodes=2`.
 
@@ -51,8 +51,8 @@ importing this module has no effect on anything else in the process -- tests
 included.
 
 `num_nodes` comes from `cluster.num_nodes` when the cluster config sets it
-(configs/cluster/jupiter_4nodes.yaml does) and from the allocation otherwise,
-which is why `cluster=jupiter_4gpu` and `cluster=local` need no new key and
+(configs/cluster/jureca_4nodes.yaml does) and from the allocation otherwise,
+which is why `cluster=jureca_4gpu` and `cluster=local` need no new key and
 behave exactly as they did.  The two can only disagree if you submit a config
 for a node count you did not ask SLURM for; `check_allocation` says so in this
 project's vocabulary, and Lightning would catch it a second later anyway.
@@ -125,7 +125,7 @@ def check_allocation(num_nodes: int, allocated: int | None, cluster_name: str) -
         f"cluster={cluster_name} is a {num_nodes}-node configuration "
         f"(cluster.num_nodes: {num_nodes}), but this allocation has {allocated} node(s). "
         f"Either submit with --nodes={num_nodes}, or pick the cluster config that "
-        "matches the allocation (jupiter_4gpu is one node, jupiter_4nodes is four)."
+        "matches the allocation (jureca_4gpu is one node, jureca_4nodes is four)."
     )
 
 
@@ -179,7 +179,7 @@ def main(cfg: DictConfig) -> None:
     num_nodes = resolve_num_nodes(
         OmegaConf.select(cfg, "cluster.num_nodes"), _slurm_int("SLURM_NNODES")
     )
-    # The *group option* actually selected, i.e. "jupiter_4nodes" -- the thing a
+    # The *group option* actually selected, i.e. "jureca_4nodes" -- the thing a
     # participant typed -- not cfg.name, which is the run name.
     cluster_name = HydraConfig.get().runtime.choices.get("cluster", "?")
     complaint = check_allocation(num_nodes, _slurm_int("SLURM_NNODES"), cluster_name)

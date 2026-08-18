@@ -176,7 +176,10 @@ def test_every_cluster_composes(cluster):
     for key in REQUIRED_CLUSTER_KEYS:
         assert key in cfg.cluster, f"main_hydra reads cfg.cluster.{key}"
     assert cfg.batch_size == cfg.cluster.batch_size
-    assert 1 <= cfg.cluster.cpus <= 72, "one booster GPU has 72 cores to itself"
+    # 72 was JUPITER's cores-per-GPU; JURECA's dc-gpu asks --cpus-per-task=12.
+    # The bound stays at the larger of the two so both machines' configs are legal,
+    # and it is a sanity check on the key, not a statement about either machine.
+    assert 1 <= cfg.cluster.cpus <= 72, "dataloader workers per process, not per node"
 
 
 def test_no_cluster_config_offers_a_gpu_count_that_does_nothing():
@@ -727,3 +730,55 @@ def test_the_fresh_checkout_error_quotes_that_timing_too(tmp_path):
         [make, "--no-print-directory", "doctor"], capture_output=True, text=True, cwd=tmp_path
     )
     assert SETUP_TIMING in result.stdout + result.stderr
+
+
+#: What each preset was measured to fit on a JURECA dc-gpu A100 (39.5 GiB
+#: usable), by `make benchmark`.  `large` has no fitting batch at all; 1 is
+#: recorded so the config still composes, and README/docs/04 say it OOMs.
+JURECA_BATCH = {"tiny": 4, "small": 2, "base": 1, "large": 1}
+
+
+@pytest.mark.parametrize("module", sorted(JURECA_BATCH))
+@pytest.mark.parametrize("cluster", ["jureca_1gpu", "jureca_4gpu", "jureca_4nodes"])
+def test_the_jureca_clusters_use_the_batch_measured_on_a_40_gib_card(module, cluster):
+    """The presets are sized for 96 GB GH200s and dc-gpu is a 40 GiB A100, so
+    `batch_size: ${module.batch_size}` put `make train-tiny` -- step 5 of the
+    README quickstart -- into an out-of-memory error on its first step.
+
+    Each preset now carries a second, measured number and the JURECA clusters read
+    THAT, so the GH200 value stays true for the machine it was measured on and
+    scripts/pretrain_large.slurm keeps working there.
+
+    MUTANT: reverting either cluster config to ${module.batch_size} fails this for
+    every preset; pinning one literal value fails it for all but one.
+    """
+    cfg = build(module=module, dataloader="glorys", cluster=cluster)
+    assert cfg.batch_size == JURECA_BATCH[module], (
+        f"{cluster} composes batch_size {cfg.batch_size} for {module}, "
+        f"but {JURECA_BATCH[module]} is what fits a 40 GiB card"
+    )
+
+
+@pytest.mark.parametrize("module", sorted(JURECA_BATCH))
+def test_the_jupiter_clusters_still_use_the_gh200_batch(module):
+    """The other half of the same contract: the GH200 numbers must NOT have been
+    edited to make JURECA work, because pretrain_large.slurm still runs there.
+
+    MUTANT: changing a preset's `batch_size` instead of adding
+    `batch_size_40gib` fails this.
+    """
+    cfg = build(module=module, dataloader="glorys", cluster="jupiter_1gpu")
+    expected = {"tiny": 8, "small": 4, "base": 2, "large": 1}[module]
+    assert cfg.batch_size == expected
+
+
+@pytest.mark.parametrize("module", sorted(JURECA_BATCH))
+def test_every_preset_declares_both_batch_sizes(module):
+    """A preset missing `batch_size_40gib` would make every jureca_* cluster fail
+    to compose with an interpolation error rather than a readable message."""
+    cfg = build(module=module, dataloader="glorys", cluster="jupiter_1gpu")
+    assert "batch_size" in cfg.module
+    assert "batch_size_40gib" in cfg.module
+    assert cfg.module.batch_size_40gib <= cfg.module.batch_size, (
+        "a 40 GiB card cannot take a bigger batch than a 96 GB one"
+    )

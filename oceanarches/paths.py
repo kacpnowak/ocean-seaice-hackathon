@@ -24,18 +24,47 @@ CONFIG_ENV = REPO_ROOT / "config.env"
 # Where generated artefacts (masks, normalisation stats, climatology) are written.
 STATS_DIR = Path(__file__).resolve().parent / "stats"
 
+# Fallbacks for a key config.env does not set. Configured for JURECA (project
+# training2635): the data paths default into the checkout, because that is where
+# the copied data lives here and JUPITER's /e/data1 and /e/scratch -- that
+# machine's Exascale filesystems -- are not mounted on JURECA at all.
 _DEFAULTS = {
-    "GLORYS_RAW": "/e/data1/climateai/hclimrep/data/glorys_1deg",
+    "GLORYS_RAW": str(REPO_ROOT / "data" / "glorys_1deg_raw"),
     "DATA_ROOT": str(REPO_ROOT / "data"),
     "GLORYS_PREPPED": str(REPO_ROOT / "data" / "glorys_1deg_prepped"),
-    "IFS_FORCING": "/e/data1/climateai/hclimrep/data/glorys_forcings/ifs_1deg",
+    "IFS_FORCING": str(REPO_ROOT / "data" / "ifs_1deg"),
     "MODELSTORE": "modelstore",
     "EVALSTORE": "evalstore",
-    "SLURM_ACCOUNT": "hclimrep",
-    "SLURM_PARTITION": "booster",
+    "SLURM_ACCOUNT": "training2635",
+    "SLURM_PARTITION": "dc-gpu",
 }
 
-_ASSIGNMENT = re.compile(r'^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*"?(.*?)"?\s*$')
+_ASSIGNMENT = re.compile(r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$")
+
+
+def _value(raw: str) -> str:
+    """The value of one ``KEY=...`` line, with a trailing comment removed.
+
+    config.env is written for bash and every setting in it carries an explaining
+    comment, but the parser used to take everything after the ``=`` and merely
+    peel off surrounding quotes, so
+
+        SLURM_ACCOUNT="training2635"    # JUPITER was: hclimrep
+
+    read back as ``training2635"    # JUPITER was: hclimrep``.  Nothing has read
+    those two keys through this module, so it never showed -- but a participant
+    who annotates a path the same way (``GLORYS_PREPPED="/my/copy"  # mine``)
+    gets a corrupted path and an error that names a directory they never typed.
+
+    Follows bash: inside quotes everything is literal, and unquoted a comment
+    starts at a ``#`` that follows whitespace -- so a ``#`` inside a path is safe.
+    """
+    raw = raw.strip()
+    if raw[:1] in ('"', "'"):
+        quote = raw[0]
+        end = raw.find(quote, 1)
+        return raw[1:end] if end != -1 else raw[1:]
+    return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +80,7 @@ def _config_env() -> dict[str, str]:
         if not match:
             continue
         key, raw = match.groups()
+        raw = _value(raw)
         # Expand ${VAR} against values seen so far, then against the real environment.
         expanded = re.sub(
             r"\$\{([A-Z_][A-Z0-9_]*)\}",

@@ -44,6 +44,14 @@ n_depths: 13
 #     climatology per sample.
 batch_size: 8
 
+# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
+# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
+# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
+# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
+# working.  Measured with `make benchmark` on a dc-gpu A100: 21.44 GiB peak, 0.312 s/step.
+# From the batch sweep: batch 8 wants 42.9 GiB and does not fit.
+batch_size_40gib: 4
+
 # MEASURED with a stopwatch, not projected: `make train-tiny` on one booster
 # GH200 (bf16-mixed, batch 8, 16 dataloader workers) took **2033 s = 33.9 min**
 # for 4500 steps, so 4500 overshot the 30-minute budget by 13%. The rate that run

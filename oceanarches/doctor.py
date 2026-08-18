@@ -7,6 +7,7 @@ exact command that fixes it.
 
 from __future__ import annotations
 
+import errno
 import importlib
 import os
 import shutil
@@ -138,10 +139,12 @@ def _check_allocation(report: Report) -> None:
         )
         report.add(PASS, "allocation", detail)
         return
-    # Hostname is the secondary signal, never the only one: `jpbl-*` is a login
-    # node and `jpbo-*` a booster node, but a compute node reached by ssh has no
-    # SLURM_JOB_ID either and is just as shared.
-    where = " (a login node)" if host.startswith("jpbl") else ""
+    # Hostname is the secondary signal, never the only one: `jpbl-*` is a JUPITER
+    # login node and `jpbo-*` a booster node; JURECA's login nodes carry "login"
+    # in the name. A compute node reached by ssh has no SLURM_JOB_ID either and is
+    # just as shared, which is why the WARN above does not depend on this at all --
+    # the annotation is cosmetic and an unrecognised host simply loses it.
+    where = " (a login node)" if host.startswith("jpbl") or "login" in host else ""
     report.add(
         WARN,
         "allocation",
@@ -222,20 +225,34 @@ def _check_ffmpeg(report: Report) -> None:
 
 def _check_data(report: Report) -> None:
     raw = paths.glorys_raw()
+    prepped = paths.glorys_prepped()
+    files = sorted(prepped.glob("glorys_1deg_*.nc")) if prepped.is_dir() else []
+
+    # The raw archive is an INPUT TO `make prep-data`, and nothing else reads it.
+    # On JURECA it was deliberately not copied -- 640 GB to reproduce a 92 GB
+    # output that came across already prepared -- so a hard FAIL here would fail
+    # every participant's first `make doctor` for something that cannot affect
+    # any run they will do. It only matters when there is nothing prepared
+    # either, and then it is the real problem and says so.
     if raw.is_dir():
         years = sorted(p.name for p in raw.iterdir() if p.is_dir() and p.name.isdigit())
         span = f"{years[0]}-{years[-1]} ({len(years)} years)" if years else "no year dirs"
         report.add(PASS, "raw GLORYS", f"{raw}  {span}")
+    elif files:
+        report.add(
+            WARN,
+            "raw GLORYS",
+            f"{raw} does not exist -- not needed, the prepared data below is here",
+            "only `make prep-data` reads it; set GLORYS_RAW in config.env if you must re-prep",
+        )
     else:
         report.add(
             FAIL,
             "raw GLORYS",
-            f"{raw} does not exist",
-            "set GLORYS_RAW in config.env",
+            f"{raw} does not exist, and there is no prepared data either",
+            "set GLORYS_RAW in config.env, then: make prep-data",
         )
 
-    prepped = paths.glorys_prepped()
-    files = sorted(prepped.glob("glorys_1deg_*.nc")) if prepped.is_dir() else []
     if not files:
         report.add(
             FAIL,
@@ -503,10 +520,77 @@ def _inspect_forcing_stats(file) -> str | None:
         return f"could not be read: {type(error).__name__}: {error}"
 
 
+def _home_inodes_left(probe_dir: Path, ceiling: int = 600) -> int | None:
+    """How many more files $HOME will take, by creating them until it will not.
+
+    There is no portable way to read an inode quota here: `quota`, `lfs` and
+    `jutil ... quota` are all absent on the JURECA login nodes, and `df` reports
+    the filesystem's terabytes rather than the user's file count.  So this
+    measures the thing directly, and stops at `ceiling` because the answer only
+    has to be "comfortably more than a Python install" or "not".
+
+    Returns None if the probe could not run at all (read-only $HOME, no space),
+    which is reported as a warning rather than guessed at.
+    """
+    made = 0
+    try:
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        for made in range(ceiling):  # noqa: B007
+            (probe_dir / f"{made}").write_text("")
+        return ceiling
+    except OSError as exc:
+        if exc.errno == errno.EDQUOT or "quota" in str(exc).lower():
+            return made
+        return None if made == 0 else made
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+
+def _check_home_quota(report: Report) -> None:
+    """$HOME's inode quota, which is what actually stops `make setup`.
+
+    Measured on JURECA: ~2050 files total, of which a fresh account already uses
+    ~480.  uv unpacks its managed CPython (several thousand files) into
+    ~/.local/share/uv/python and its wheel cache (tens of thousands) into
+    ~/.cache/uv unless told otherwise, so a stock `uv venv` dies with
+
+        Failed to extract archive: cpython-3.12.14-...tar.gz
+          Caused by: Disk quota exceeded (os error 122)
+
+    before torch is even considered.  scripts/setup_env.sh now points both at
+    $REPO_ROOT/.uv, so this check exists to catch the OTHER things that write to
+    $HOME -- pip's cache, ~/.cache/huggingface, a hand-made venv -- and to name
+    inodes when they do, because nothing else in the error will.
+    """
+    home = Path.home()
+    headroom = _home_inodes_left(home / ".oceanarches_inode_probe")
+    if headroom is None:
+        report.add(
+            WARN,
+            "home quota",
+            f"could not probe {home} -- is it writable?",
+            "a full or read-only $HOME breaks `make setup` in ways the error will not name",
+        )
+        return
+    if headroom >= 600:
+        report.add(PASS, "home quota", f"{home} accepts 600+ more files")
+        return
+    report.add(
+        WARN if headroom > 100 else FAIL,
+        "home quota",
+        f"{home} accepted only {headroom} more files before EDQUOT -- this is an "
+        f"INODE quota, not a space one, so `df` will show terabytes free",
+        "keep caches off $HOME. scripts/setup_env.sh already does this for uv; for the "
+        "rest: export UV_CACHE_DIR=$PWD/.uv/cache XDG_CACHE_HOME=$PWD/.cache "
+        "PIP_CACHE_DIR=$PWD/.cache/pip, and delete ~/.cache",
+    )
+
+
 def main() -> int:
     print(f"OceanArches doctor -- repo at {paths.REPO_ROOT}")
     report = Report()
     _check_python(report)
+    _check_home_quota(report)
     _check_imports(report)
     _check_allocation(report)
     _check_gpu(report)

@@ -15,12 +15,38 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# CUDA build of torch to use.  aarch64 (GH200) wheels are NOT on plain PyPI --
-# the PyPI aarch64 wheel is CPU-only -- so we must point at PyTorch's own index.
+# CUDA build of torch, from PyTorch's own index rather than PyPI.
+# On JUPITER (aarch64/GH200) that was mandatory: the PyPI aarch64 wheel is
+# CPU-only. On JURECA (x86_64) PyPI would serve a CUDA build too, but naming the
+# index keeps the CUDA version explicit and one line works on both machines.
+#
+# A `.venv` from JUPITER CANNOT be copied to JURECA: those wheels are aarch64 and
+# this is x86_64. That is why the move brought the data and the checkpoints but
+# not the environment -- it has to be built here, which is what this script does.
 TORCH_INDEX="https://download.pytorch.org/whl/cu126"
 PYTHON_VERSION="3.12"
 
 echo "==> Project root: $REPO_ROOT"
+
+# --- 0. keep uv off $HOME ----------------------------------------------------
+# JURECA's $HOME is inode-quotaed, and the quota is small: measured at ~2050
+# files total, of which a fresh account already uses ~480.  uv defaults to
+# unpacking its managed CPython into ~/.local/share/uv/python (several thousand
+# files) and its wheel cache into ~/.cache/uv (tens of thousands), so a stock
+# `uv venv` dies partway through the interpreter with
+#
+#     Failed to extract archive: cpython-3.12.14-...tar.gz
+#       Caused by: Disk quota exceeded (os error 122)
+#
+# which says nothing about $HOME, nothing about inodes, and happens before torch
+# is even considered.  df reports terabytes free, because the limit is on the
+# number of files and not on their size.  Both directories go under the repo --
+# which is on scratch -- unless the caller has already chosen somewhere else.
+export UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-$REPO_ROOT/.uv/python}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$REPO_ROOT/.uv/cache}"
+mkdir -p "$UV_PYTHON_INSTALL_DIR" "$UV_CACHE_DIR"
+echo "==> uv python  -> $UV_PYTHON_INSTALL_DIR"
+echo "==> uv cache   -> $UV_CACHE_DIR"
 
 # --- 1. make sure uv is available -------------------------------------------
 if ! command -v uv >/dev/null 2>&1; then

@@ -59,11 +59,11 @@ steps and an SSH tunnel.
 **1. Get a compute node and start the server there.**
 
 ```bash
-srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
-     --cpus-per-task=16 --time=02:00:00 --pty bash
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=02:00:00 --pty bash
 
 export CUDA_VISIBLE_DEVICES=0
-cd /e/scratch/hclimrep/$USER/hackathon-ocean-sea-ice
+cd /p/scratch/training2635/4_ocean_ai/$USER/hackathon-ocean-sea-ice
 hostname                       # <- write this down, e.g. jpbo-053-01.jupiter.internal
 .venv/bin/jupyter lab --no-browser --ip=0.0.0.0 --port=8888
 ```
@@ -84,7 +84,7 @@ another one and use it in both places, for instance `--port=8899`.
 normally SSH into JUPITER with, and the compute node name from step 1:
 
 ```bash
-ssh -N -L 8888:jpbo-053-01.jupiter.internal:8888 <your-user>@<the JUPITER login host>
+ssh -N -L 8888:jpbo-053-01.jupiter.internal:8888 <your-user>@<the JURECA login host>
 ```
 
 `-N` means "do not run a command, just forward the port". It looks like it has

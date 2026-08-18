@@ -18,7 +18,7 @@ the 92 GB of prepared data, the generated statistics and four trained
 checkpoints:
 
 ```
-/e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice
+/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
 ```
 
 Take your own copy of it. It is an ordinary git repository, so cloning it locally
@@ -26,14 +26,14 @@ works and gives you your own branch to commit on, without duplicating any of the
 large generated directories (they are all git-ignored):
 
 ```bash
-mkdir -p /e/scratch/hclimrep/$USER
-cd /e/scratch/hclimrep/$USER
-git clone /e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice
+mkdir -p /p/scratch/training2635/4_ocean_ai/$USER
+cd /p/scratch/training2635/4_ocean_ai/$USER
+git clone /p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
 cd hackathon-ocean-sea-ice
 ```
 
 That takes a few seconds and about 7 MB. **The rest of this kit assumes you are
-in `/e/scratch/hclimrep/$USER/hackathon-ocean-sea-ice`.**
+in `/p/scratch/training2635/4_ocean_ai/$USER/hackathon-ocean-sea-ice`.**
 
 ### The normal route
 
@@ -42,7 +42,7 @@ a fresh clone has no environment, no statistics and no checkpoints, and it has
 to get them:
 
 ```bash
-cd /e/scratch/hclimrep/$USER/hackathon-ocean-sea-ice
+cd /p/scratch/training2635/4_ocean_ai/$USER/hackathon-ocean-sea-ice
 
 # 1. the environment                             (~30 s warm, ~5 min cold)
 make setup
@@ -53,7 +53,7 @@ make stats
 # 3. the shipped checkpoints, if you want the no-training experiments:
 #    YOUR OWN modelstore/, with the shipped runs linked in one by one
 mkdir -p modelstore
-SHARED=/e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice/modelstore
+SHARED=/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice/modelstore
 for run in large_pretrained task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
     ln -s $SHARED/$run modelstore/$run
 done
@@ -133,6 +133,36 @@ on, pinned to one commit so everybody in the room has the same version. It takes
 re-check an existing one, with uv's wheel cache already populated. The first
 build on a machine downloads ~2 GB of PyTorch and takes about five minutes.
 
+Measured cold on JURECA from a wiped `.venv` and a wiped cache: **58 seconds**.
+
+**`$HOME` on JURECA has an inode quota, and it is small.** About 2050 files in
+total, of which a fresh account already uses ~480 -- measured by creating files
+until the filesystem refused. `df` reports terabytes free, because the limit is
+on the *number* of files rather than their size. Left to itself `uv` unpacks its
+managed CPython (several thousand files) into `~/.local/share/uv/python` and its
+wheel cache (tens of thousands) into `~/.cache/uv`, and `make setup` used to die
+partway through the interpreter with
+
+```
+error: Failed to extract archive: cpython-3.12.14-...tar.gz
+  Caused by: Disk quota exceeded (os error 122)
+```
+
+before it had even considered PyTorch. `scripts/setup_env.sh` now points both at
+`.uv/` inside the repository, which is on scratch, so this does not happen. Set
+`UV_PYTHON_INSTALL_DIR` or `UV_CACHE_DIR` yourself if you want them somewhere
+else -- the script honours both.
+
+**The same trap catches anything else that caches in `$HOME`.** If you install a
+tool of your own, or pull a model from HuggingFace, send its cache to scratch:
+
+```bash
+export XDG_CACHE_HOME="$PWD/.cache" PIP_CACHE_DIR="$PWD/.cache/pip"
+```
+
+`make doctor` measures the remaining headroom and FAILs when it is nearly gone,
+because nothing in the resulting error message mentions inodes.
+
 **Never run `pip install` by hand in this project.** Use `.venv/bin/python`
 directly, or `make` targets, which already do. You do not need to `activate`
 anything.
@@ -158,29 +188,35 @@ make doctor
 ```
 
 This is the command to run first, and again whenever something breaks. Real
-output from a working checkout:
+output from a working checkout -- **captured on JUPITER, where this kit was
+built**, so four lines read differently on JURECA and none of them is a problem:
+the GPU is a different card, `ffmpeg` is the x86_64 build rather than aarch64,
+the two `/e/...` paths are now under `/p/scratch/training2635`, and **`raw
+GLORYS` is a WARN rather than a PASS** because the 640 GB raw archive was
+deliberately not copied -- only `make prep-data` reads it, and the prepared data
+it produces came across ready to use.
 
 ```
-OceanArches doctor -- repo at /e/scratch/hclimrep/nowak2/hackathon-ocean-sea-ice
+OceanArches doctor -- repo at /p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
 
-  PASS  python           3.12.13 (/e/scratch/.../.venv/bin/python)
+  PASS  python           3.12.13 (/p/scratch/.../.venv/bin/python)
   PASS  imports          all core packages import
   PASS  power spectrum   pyshtools available
   WARN  allocation       none -- SLURM_JOB_ID is unset, on jpbl-s02-02 (a login node)
-                         -> anything that trains or evaluates needs a node of your own: srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 --cpus-per-task=16 --time=01:00:00 --pty bash  (then: export CUDA_VISIBLE_DEVICES=0)
+                         -> anything that trains or evaluates needs a node of your own: srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 --cpus-per-task=12 --time=01:00:00 --pty bash
   WARN  gpu              1x NVIDIA GH200 480GB (torch 2.9.1+cu126), 94 of 95 GiB free on device 0 -- visible, but NOT allocated to you
                          -> a visible card is not an idle one; see the `allocation` line above
   PASS  ffmpeg           ffmpeg-linux-aarch64-v7.0.2
-  PASS  raw GLORYS       /e/data1/climateai/hclimrep/data/glorys_1deg  1993-2026 (34 years)
-  PASS  prepared data    /e/scratch/.../data/glorys_1deg_prepped  33 yearly files (1993-2025)
+  WARN  raw GLORYS       .../glorys_1deg_raw_NOT_COPIED does not exist -- not needed, the prepared data below is here
+  PASS  prepared data    /p/scratch/.../data/glorys_1deg_prepped  33 yearly files (1993-2025)
   PASS  masks            glorys_1deg_masks.nc (2.9 MB)
   PASS  norm stats       glorys_1deg_stats.pt (4.1 KB)
   PASS  climatology      glorys_1deg_climatology.nc (95.4 MB)
   PASS  stats depth      statistics: normalisation from 400 dates from 1993-2025, climatology from 33 of 33 years (1993-2025)
-  PASS  IFS forcing      /e/data1/climateai/hclimrep/data/glorys_forcings/ifs_1deg  52 files
+  PASS  IFS forcing      /p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice/data/ifs_1deg  52 files
   PASS  forcing stats    ifs_1deg_forcing_stats.pt (2.5 KB)
 
-  No failures, 2 warning(s) -- you can start working.
+  No failures, 3 warning(s) -- you can start working.
 ```
 
 That is the **login node**, and those two warnings are the point of the check.
@@ -215,21 +251,29 @@ JUPITER is a shared machine. You log in to a **login node**, which is for
 editing files, running `make doctor` and reading logs. You must **not** train
 there. Real work goes to a **compute node**, and you ask for one through SLURM.
 
-A booster node has **4x NVIDIA GH200** (96 GB of GPU memory each), 288 CPU cores
-and 878 GB of RAM. You normally want one quarter of that.
+A `dc-gpu` node has **4 GPUs**, and you normally want one quarter of it: one
+card and `--cpus-per-task=12`, which is what the other challenges in this project
+ask for.
+
+**The exact card and its memory are not quoted here on purpose.** This kit was
+built on JUPITER, whose booster nodes carry 4x GH200 with 96 GB each, and every
+`batch_size` in `configs/module/*.yaml` was measured against that. Nobody has
+re-measured them on JURECA. Run `make benchmark` inside your allocation before
+committing to a long run -- it prints the card, its memory and the peak usage of
+every preset -- and see [docs/TUTORS.md section 0](TUTORS.md).
 
 ### Interactive: run one command on a GPU and watch it
 
 ```bash
-srun --account=hclimrep --partition=booster --gres=gpu:1 --ntasks=1 \
-     --cpus-per-task=16 --time=01:00:00 --pty bash
+srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
+     --cpus-per-task=12 --time=01:00:00 --pty bash
 ```
 
 That drops you into a shell **on** the compute node with one GPU. Then:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=0
-cd /e/scratch/hclimrep/$USER/hackathon-ocean-sea-ice
+cd /p/scratch/training2635/4_ocean_ai/$USER/hackathon-ocean-sea-ice
 make train-tiny NAME=my_first_run
 ```
 
@@ -244,12 +288,12 @@ Put your commands in a file:
 ```bash
 cat > run.slurm <<'EOF'
 #!/usr/bin/env bash
-#SBATCH --account=hclimrep
-#SBATCH --partition=booster
+#SBATCH --account=training2635
+#SBATCH --partition=dc-gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=12
 #SBATCH --time=01:00:00
 #SBATCH --output=logs/%x-%j.out
 
@@ -274,8 +318,8 @@ These are not hypothetical. Each of them cost real time here.
 **1. `--cpus-per-task=N` without `--ntasks=1` runs your script N times.**
 
 ```bash
-srun --cpus-per-task=16 my_script.py         # WRONG: several concurrent copies
-srun --ntasks=1 --cpus-per-task=16 my_script.py   # right
+srun --cpus-per-task=12 my_script.py         # WRONG: several concurrent copies
+srun --ntasks=1 --cpus-per-task=12 my_script.py   # right
 ```
 
 During this project that launched four concurrent copies of the test suite on
@@ -284,7 +328,7 @@ source file, which half-mutated it. **Always pass `--ntasks=1`.**
 
 **2. `--gres=gpu:1` gives you all four GPUs anyway.**
 
-The booster partition allocates whole nodes. Ask for one GPU and sixteen cores
+JUPITER's booster partition allocates whole nodes. Ask for one GPU and sixteen cores
 and SLURM hands you the lot. Measured, on the exact `srun` line printed above:
 
 ```
@@ -331,11 +375,11 @@ old ones freely; nothing reads them. `rm -rf outputs/` is always safe.
 
 | path | what it is | writable? |
 |---|---|---|
-| `/e/data1/climateai/hclimrep/data/glorys_1deg` | the raw GLORYS archive, 608 GB | no, read-only |
+| *(not on JURECA)* | the raw GLORYS archive, 608 GB, lives on JUPITER and was not copied | n/a |
 | `data/glorys_1deg_prepped/` | 33 prepared yearly files, 92 GB | yes, but do not |
 | `oceanarches/stats/` | masks, normalisation statistics, climatology | rebuilt by `make stats` |
 | `oceanarches/stats/ifs_1deg_forcing_stats.pt` | normalisation for `forcing=file` only | rebuilt by `make forcing-stats` |
-| `/e/data1/climateai/hclimrep/data/glorys_forcings/ifs_1deg` | the optional IFS atmosphere, 1.1 GB | no, read-only |
+| `data/ifs_1deg/` | the optional IFS atmosphere, 833 MB, copied from JUPITER | no, read-only |
 | `modelstore/<name>/` | checkpoints and the config of a training run | yes |
 | `evalstore/<name>/` | figures, animations, reports, cached rollouts | yes |
 | `logs/`, `outputs/`, `wandblogs/`, `lightning_logs/` | job output and run metadata | yes |
@@ -410,7 +454,7 @@ make test
 generated mask file, and 45 of its tests cannot run without it.
 
 ```
-604 passed, 1 skipped, 32 warnings in 81.62s (0:01:21)
+722 passed, 1 skipped, 32 warnings in 217.69s (0:03:38)
 ```
 
 That is the full route -- `make setup`, `make stats`, `make forcing-stats`. Two
@@ -418,9 +462,9 @@ other counts are correct rather than broken, and both say so when you look:
 
 | what you ran | result |
 |---|---|
-| `make setup` + `make stats` + `make forcing-stats` | **604 passed, 1 skipped** |
-| `make setup` + `make stats` (the usual route) | **602 passed, 3 skipped** -- the two extra skips are the `forcing=file` normalisation, which needs `make forcing-stats` (~10 s) |
-| `make setup` only, no statistics | **495 passed, 110 skipped**, each skip naming `make stats` |
+| `make setup` + `make stats` + `make forcing-stats` | **722 passed, 1 skipped** in 3 min 38 s |
+| `make setup` + `make stats` (the usual route) | **720 passed, 3 skipped** in 3 min 59 s -- the two extra skips are the `forcing=file` normalisation, which needs `make forcing-stats` (~10 s) |
+| `make setup` only, no statistics | **609 passed, 114 skipped** in 1 min 52 s, each skip naming `make stats` |
 
 All three measured on this commit. The last one is the one to know: a clone that
 has not run `make stats` used to give **45 failures** here, all of them the same

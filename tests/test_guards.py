@@ -1099,6 +1099,39 @@ def test_an_out_of_memory_death_names_batch_size_and_not_the_allocator():
     assert guards.oom_advice(RuntimeError("CUDA out of memory"), 8) is not None
 
 
+def test_at_batch_size_one_the_advice_stops_telling_you_to_halve_it():
+    """Measured on JURECA: a `large` fine-tune OOMs on its first step at
+    `batch_size` 1 with `gradient_checkpointing` already True, and the advice read
+    ``halve it  HYDRA_ARGS="++batch_size=1"`` -- the value that had just failed.
+
+    MUTANT: restoring `smaller = max(1, batch // 2)` and always emitting the
+    "halve it" line fails this, because at batch 1 that line advises 1.
+    """
+    err = RuntimeError("CUDA out of memory. Tried to allocate 86 MiB")
+
+    # Both levers already at their limit: say so, and do not suggest an override.
+    advice = guards.oom_advice(err, 1, "large", gradient_checkpointing=True)
+    assert advice is not None
+    assert "++batch_size=1" not in advice, "1 is what just failed"
+    assert "no override that fixes it" in advice
+    assert "INFERENCE still fits" in advice, "the useful remaining route"
+    assert "DDP replicates" in advice, "more GPUs is not the same as a bigger GPU"
+
+    # Batch 1 but checkpointing still available: offer that, still not a halving.
+    advice = guards.oom_advice(err, 1, "base", gradient_checkpointing=False)
+    assert "++batch_size=1" not in advice
+    assert "gradient_checkpointing=True" in advice
+
+    # A halveable batch keeps the original advice.
+    advice = guards.oom_advice(err, 8, "tiny", gradient_checkpointing=False)
+    assert "++batch_size=4" in advice
+
+    # ... and is told when checkpointing is not a lever it still has.
+    advice = guards.oom_advice(err, 4, "small", gradient_checkpointing=True)
+    assert "++batch_size=2" in advice
+    assert "already on" in advice
+
+
 def test_an_unrelated_crash_is_not_dressed_up_as_an_out_of_memory():
     assert guards.oom_advice(ValueError("shapes do not match"), 8) is None
     assert guards.oom_advice(KeyboardInterrupt(), 8) is None

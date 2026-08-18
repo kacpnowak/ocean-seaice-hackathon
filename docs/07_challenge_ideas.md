@@ -136,6 +136,28 @@ and it held on `siconc`, `sithick`, `usi`, `vsi` and Arctic ice-edge error with
 the shipped 2000-step models. The gap between arm 1 and arm 3 is the error the
 ice model *inherits* from the ocean model.
 
+Re-measured on JURECA with the shipped checkpoints, day-10 `siconc` RMSE:
+
+| arm | day-10 siconc RMSE | useful horizon |
+|---|---|---|
+| true ocean | 0.044483 | 23 days |
+| frozen ocean | 0.044735 | 22 days |
+| predicted ocean | 0.045429 | 18 days |
+
+Day **1** is identical for arms 1 and 2 (0.010445), and that is the arithmetic
+working: at *t=0* an ocean frozen at its initial state *is* the true ocean, so the
+first step cannot tell them apart. If your arm 1 and arm 2 differ at day 1,
+something is wrong with the forcing policy rather than with the ice model.
+
+**Read the ordering off the per-variable RMSE tables, not off the loss.** Arms 1
+and 2 fill only the `seaice` slot, so their `losses` in `summary.json` are the
+sea-ice loss; arm 3 also fills `ocean`, so its loss covers the ocean variables
+too. The two numbers are not on the same scale and the persistence baseline moves
+with them -- 0.8855 for the ice-only arms against 2.2605 for arm 3. Compared
+naively, arm 3 looks catastrophically worse (2.7151 against 0.6712) when it is
+simply being scored on more variables. `report.md`'s RMSE tables are per variable
+and are directly comparable; the loss is not.
+
 **What to do with it.** Train a better ocean model and watch the gap close. If it
 does not close, the coupling is not where your error is.
 
@@ -232,6 +254,35 @@ The full tables are in
 [docs/05 section 5.6](05_coupling.md#what-a-short-forced-run-actually-measured).
 That is a null result at a tiny budget with one run per arm, not evidence that
 forcing cannot help, and it is exactly the sort of thing worth pushing on.
+
+**Re-run on JURECA, and the null result holds -- but it is not uniform, which is
+the useful part.** Same commands, `batch_size` 4 rather than the GH200 run's 8
+(so these 1000 steps saw half the samples that one did; the two arms are
+comparable to each other and not to the numbers above):
+
+| | day 1 | day 10 |
+|---|---|---|
+| variables where forcing *helped* | 32 of 59 | 29 of 59 |
+| variables where the forced arm beats persistence | 24 of 59 | **9 of 59** |
+
+32 of 59 is a coin flip. But at day 10 the sign is not random across variables --
+it splits by *which* variable:
+
+| day-10 RMSE | unforced | forced | | persistence |
+|---|---|---|---|---|
+| `siconc` | 0.06691 | **0.06377** | **-4.7%** | 0.05621 |
+| `vsi` | | | **-3.9%** | |
+| `mlotst` | 26.849 | **26.526** | **-1.2%** | 21.457 |
+| `thetao0m` | 1.30007 | 1.39593 | +7.4% | 0.67451 |
+| `zos` | 0.13850 | 0.15200 | +9.7% | 0.06438 |
+
+**Forcing helped the sea ice and the mixed layer, and hurt the surface height and
+the SST.** That is the shape you would expect if the atmosphere is carrying real
+information to the ice and the mixed layer while also destabilising a
+sea-surface-height field that a 1000-step model has not learned to hold steady --
+and it is a much better lead than the single whole-field number, which averages
+the two into "no effect". Point 4 below is therefore not a nice-to-have: score
+where the atmosphere should matter, because on the average it does not show.
 
 Where to push, in rough order of expected value:
 
@@ -404,8 +455,30 @@ Cheap probes:
 
 **Difficulty:** hard, and mostly engineering. **Time:** a full day, at least.
 
-The data is there: `/e/data1/climateai/hclimrep/data/glorys_025`, 1993 onwards,
-daily. Verified from a real file:
+**Three years are staged and waiting**, raw and unprepared, at
+
+```
+/p/scratch/training2635/4_ocean_ai/nowak2/glorys_025/{2017,2018,2019}
+```
+
+876 GB of it. Three *consecutive* years, chosen against `SPLIT_YEARS` in
+`oceanarches/dataloaders/glorys.py` so the shipped splits work without editing
+them: **2017 and 2018 are training years and 2019 is the validation year** --
+and 2019 is exactly `tiny_val`, while 2017-2018 sit inside `tiny_train`
+(2014-2018). So `dataloader=glorys_tiny` works on this data as it stands.
+
+**There is no test year**, because a run of three cannot reach one: `test` starts
+at 2021 and `val` is two years wide. Score with `--domain val`:
+
+```bash
+make eval NAME=my_025_run EVAL_ARGS="--domain val"
+```
+
+The full archive is 1993 onwards and roughly 10 TB, so if you need more years,
+**ask a tutor** -- another year is 292 GB and about eight minutes to copy, and
+there is room for it.
+
+Verified from a real file:
 
 ```
 {'time': 1, 'lat': 720, 'lon': 1440, 'depth': 50}
@@ -423,8 +496,8 @@ Here is what will actually need to change, honestly:
 `--data-root`), so pointing it at the 0.25-degree tree is easy:
 
 ```bash
-.venv/bin/python scripts/prepare_glorys.py --years 2015 \
-    --raw-root /e/data1/climateai/hclimrep/data/glorys_025 \
+.venv/bin/python scripts/prepare_glorys.py --years 2017 \
+    --raw-root /p/scratch/training2635/4_ocean_ai/nowak2/glorys_025 \
     --out-root data/glorys_025_prepped
 ```
 
@@ -451,11 +524,66 @@ Take the first. It is a small edit and a large blast radius: `variables.py` is
 the single source of truth, so every mask, statistic, metric and plot follows it,
 and all of them have to be regenerated.
 
-Then the size: the 92 GB output becomes roughly **1.5 TB** for the whole archive
-at the same 14 levels. Prepare a few years, not 33. `scripts/compute_stats.py`
-has to be rerun too -- masks, statistics and the climatology are all resolution
-specific -- and it peaked at 5.6 GB of memory on 1 degree, so budget
-proportionally more.
+**The edit itself, read off a real staged file** (`2017/01/...`, checked against
+`variables.py` rather than guessed):
+
+```python
+# oceanarches/dataloaders/variables.py, replacing lines 29-31
+N_LAT, N_LON = 720, 1440
+LAT = [-89.875 + i * 0.25 for i in range(N_LAT)]   # -89.875 ... 89.875
+LON = [0.0 + i * 0.25 for i in range(N_LON)]       #   0.000 ... 359.750
+```
+
+**The vertical and the variable set really are unchanged**, and this has now been
+run rather than reasoned about. The 0.25-degree files carry the same eleven
+variables and the same 50 depth levels, and `PREPPED_DEPTH_INDICES` resolves to
+the identical depths -- confirmed by reading them back off a prepared
+0.25-degree file: 0.5, 5.1, 15.8, 29.4, 55.8, 92.3, 155.9, 222.5, 318.1, 453.9,
+643.6, 902.3, 1245.3, 1684.3 m. Nothing about the vertical, the variable set or
+the masking logic changes.
+
+**It was not, however, the only edit.** `variables.py` is the single source of
+truth for the grid, and two scripts quietly did not read it: both
+`prepare_glorys.py` and `compute_stats.py` took `N_LAT`/`N_LON` from it for their
+array *shapes* but wrote the coordinate *values* from a hardcoded
+`np.arange(-89.5, 90.0, 1.0)`. Changing the constants therefore got you
+
+```
+ValueError: shape mismatch ... arg 0 with shape (720,) and arg 1 with shape (180,)
+ValueError: operands could not be broadcast together ... (180,1) and requested shape (720,1440)
+```
+
+from inside netCDF4 and numpy, several layers below anything that mentions a
+grid. **Both now read `LAT` and `LON` from `variables.py`, so this is fixed** and
+the grid-constants edit above is genuinely all the preparation needs. The
+prepared file's `title` and `source` are derived too, so a 0.25-degree file no
+longer claims to be "regridded to 1 degree via cdo remap,r360x180".
+
+**Measured, preparing a full year (2019) on one dc-gpu node:**
+
+| | |
+|---|---|
+| one year | **34.9 min**, steady at 0.2 day/s |
+| output | **41.74 GB** for 365 days at 14 levels, i.e. 114 MB/day |
+| whole archive | ~1.4 TB, so the 1.5 TB estimate above is right |
+| `compute_stats.py` | its climatology accumulators scale with the **grid**, not with the number of years, so more years cost time and not memory. Measured at **14.8 GiB** in the parent process. But `--jobs N` holds a copy of them per worker -- the docstring in the script puts one accumulator at 350 MB on 1 degree, so 5.6 GB each here -- so divide your memory budget by `N` before choosing it. |
+
+Three years is therefore about **1.7 hours and 125 GB**, which is a coffee break
+rather than the day the rest of this section needs.
+
+**One thing that is NOT fixed, and cannot be locally: the prepared files are
+still named `glorys_1deg_<year>.nc`, and the statistics are still
+`glorys_1deg_masks.nc`, `glorys_1deg_stats.pt` and
+`glorys_1deg_climatology.nc`.** That prefix is baked into the discovery globs in
+`oceanarches/doctor.py` and `oceanarches/dataloaders/glorys.py` and into
+`oceanarches/paths.py`, so renaming it is an eight-file change and not part of
+this experiment. The consequence matters: **a 0.25-degree run and a 1-degree run
+cannot share a checkout.** The masks and statistics have the same filenames and
+different shapes, so building one silently invalidates the other. Do the whole
+experiment in a **separate copy of the repo with its own `config.env`**
+(`DATA_ROOT`, `GLORYS_PREPPED`) and its own `oceanarches/stats/`; that is how the
+numbers on this page were produced, and it keeps your working 1-degree setup
+alive while you break things.
 
 **Patch size and the latent grid.** The embedder patches `(2, 3, 3)`, so 1 degree
 gives a latent grid of `8 x 60 x 120`. At 0.25 degrees the same patch gives
@@ -465,18 +593,68 @@ attention cost and memory. Two options:
 * increase the horizontal patch to `(2, 12, 12)`, giving the identical
   `8 x 60 x 120` latent grid and therefore the identical cost, at the price of a
   much coarser token;
-* keep the patch and pay for it -- but `window_size: [1, 6, 10]` must still divide
-  the latent grid *and* the downsampled grid, so check the arithmetic before you
-  submit a long job.
+* keep the patch and pay for it.
+
+**The arithmetic checks out for both**, so this is a cost decision and not a
+correctness one -- worked through rather than left to you:
+
+| patch | latent grid | `window_size [1,6,10]` divides? | downsampled (halved) divides? |
+|---|---|---|---|
+| `(2, 3, 3)` (shipped) | 240 x 480 | yes (240/6, 480/10) | yes (120/6, 240/10) |
+| `(2, 12, 12)` | 60 x 120 | yes | yes |
+
+The first is 16x the tokens of 1 degree, and therefore roughly 16x the attention
+cost and memory. The second is free, and blunter.
+
+**`patch_size` is not the only thing to change if you take the first option.**
+`module.backbone.tensor_size` is pinned to `[8, 60, 120]` in every preset
+(`configs/module/tiny.yaml`), and it is the latent grid the backbone asserts
+against. Keep the shipped patch at 0.25 degrees and leave it alone and you get
+
+```
+AssertionError: input feature has wrong size
+```
+
+from inside geoarches, naming nothing. Set it to the latent grid your patch
+actually produces -- `++module.backbone.tensor_size=[8,240,480]` for the shipped
+`(2, 3, 3)`. With `(2, 12, 12)` the latent grid stays `8 x 60 x 120` and the
+shipped value is already right, which is why that route works untouched.
 
 **The depth axis is untouchable.** 12 or 13 levels, latent depth 8, whatever the
 horizontal resolution -- see
 [docs/04](04_scaling_finetuning.md#42-the-vertical-is-not-a-scaling-axis).
 
-**Memory.** `tiny` at batch 8 already peaks at **42.6 GiB** of a 96 GB card at
-1 degree. Expect batch 1 at 0.25 degrees with the same patch size, and plan on
-`gradient_checkpointing: True` (which `large` already uses) and probably four
-GPUs.
+**Memory, measured on a JURECA dc-gpu A100 (39.5 GiB usable), `tiny` at
+0.25 degrees.** These are `make benchmark` runs, forward + backward + optimiser,
+compute only:
+
+| patch | `tensor_size` | latent grid | batch | peak | s/step | 4000 steps |
+|---|---|---|---|---|---|---|
+| `(2, 3, 3)` | `[8,60,120]` (shipped) | — | 1 | **AssertionError** | — | — |
+| `(2, 3, 3)` | `[8,240,480]` | 240 x 480 | 1 | **OOM** | — | — |
+| `(2, 3, 3)` | `[8,240,480]` + grad ckpt | 240 x 480 | 1 | **OOM** | — | — |
+| `(2, 12, 12)` | `[8,60,120]` | 60 x 120 | 1 | 6.78 GiB | 0.127 s | 8 min |
+| `(2, 12, 12)` | `[8,60,120]` | 60 x 120 | 2 | 13.32 GiB | 0.182 s | 12 min |
+| `(2, 12, 12)` | `[8,60,120]` | 60 x 120 | 4 | **OOM** | — | — |
+
+**So on JURECA, "keep the patch and pay for it" is not a cost decision -- it is
+not available.** Not at batch 1, and not with `gradient_checkpointing: True`
+either. An earlier version of this page projected "batch 1, gradient
+checkpointing, probably four GPUs" from the 96 GB GH200 the kit was built on; on
+a 40 GiB card batch 1 does not fit, and **four GPUs do not fix it**, because
+Lightning's DDP replicates the whole model on every rank rather than sharding it.
+Sharding the parameters, gradients and optimiser state (FSDP, ZeRO-3) would buy
+back only a few GiB of the total -- 459.6M params is the `large` preset, and
+`tiny` here is 15.8M -- because what does not fit is the **activations**, and
+those are per-rank whatever you shard.
+
+The route that works on this machine is the blunt one: **patch `(2, 12, 12)`, at
+batch 1 or 2.** Note the embedder grows from 0.17M to 2.74M parameters (a 12x12
+patch projection instead of 3x3), so the preset is 15.8M rather than 13.2M.
+Note also that peak memory is *not* linear in the batch here -- 6.78 GiB at
+batch 1, 13.32 at batch 2, and batch 4 does not fit in 39.5 -- because the
+decoder reconstructs the full 720 x 1440 field, so measure rather than
+extrapolate.
 
 **The dataloader will become the bottleneck**, which it is not at 1 degree
 (3% data tax with 16 workers). Each sample is 16x larger. Measure it before
@@ -493,6 +671,50 @@ see how far it moves toward the published 14-16.**
 two years, rebuild the masks and statistics, get one forward and backward step to
 run inside memory, and report the measured step time and the projected wall
 clock. That is a genuinely useful result and it is what the next team would need.
+
+**That target has now been reached**, end to end: 2019 prepared in full (34.9 min,
+41.74 GB), 24 days of 2017 as a training year, masks and statistics and
+climatology rebuilt at 0.25 degrees, `make doctor` green, and `make train` running
+real steps through the real dataloader with a checkpoint on disk. The two tables
+above are the memory and compute. Three results from it:
+
+**1. The dataloader is indeed the bottleneck, and it is not close.** Measured with
+`make benchmark BENCH_ARGS="--data"` at patch `(2, 12, 12)`, batch 2:
+
+| | 1 degree | 0.25 degrees |
+|---|---|---|
+| compute only | 0.307 s/step | 0.182 s/step |
+| fed by the dataloader | +3% | **0.766 s/step** |
+| the data tax | 3% | **4.2x the compute -- 76% of the step** |
+
+So at 0.25 degrees you are not waiting for the GPU. Every hour of optimisation
+spent on the model is an hour spent on the wrong 24%.
+
+**2. A real `make train` step is much slower than either of those, and we could
+not cleanly attribute it.** The observed rate was well below the benchmark's
+0.766 s/step, but on a 22-sample training split with validation every 11 steps a
+12-to-20-step run is dominated by start-up and by epoch boundaries, and turning
+`compute_acc` off made the *measured* rate worse rather than better -- which is
+the signature of a measurement that is not measuring steps at all. **So this is an
+open question, not a result.**
+
+It is worth chasing, because the mechanism is plausible: geoarches recomputes every
+training metric on every step, ACC interpolates the monthly climatology per
+sample, and that climatology is **1366 MB** at 0.25 degrees against 95 MB at
+1 degree. At 1 degree the metrics cost 0.09 s/step
+([docs/04](04_scaling_finetuning.md)). **To settle it, prepare a full training
+year first**, then time 200+ steps with `compute_acc` on and off. Do not trust a
+short run on a 22-sample split -- we tried, and it told us nothing.
+
+**3. The masks did move.** The surface ocean fraction comes out at **67.0%** at
+0.25 degrees against **69.6%** at 1 degree -- land goes from 30.4% to 33.0% of the
+grid as the finer coastline resolves. The sea-ice extent measurement below is the
+interesting follow-on, and now costs nothing to try.
+
+What is left for a team that wants to go further: prepare 2017 and 2018 in full
+(~35 min each), and train properly. Budget from a *measured* step time on that
+data rather than from the benchmark's compute-only figure -- the 4.2x data tax
+above is the floor, not the estimate.
 
 ## 3b. Regional at high resolution
 
