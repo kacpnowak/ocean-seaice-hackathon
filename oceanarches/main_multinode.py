@@ -4,7 +4,7 @@ Use it exactly like `geoarches.main_hydra` -- same flags, same config groups,
 same `--config-path` rule::
 
     .venv/bin/python -m oceanarches.main_multinode --config-path $PWD/configs \\
-        cluster=jureca_4nodes module=large dataloader=glorys ++name=my_large_run
+        cluster=jureca_4nodes module=base dataloader=glorys ++name=my_run
 
 ---------------------------------------------------------------------------
 Why this module exists
@@ -23,7 +23,7 @@ says so rather than mistraining:
     ValueError: You set `num_nodes=1` in Lightning, but the number of nodes
     configured in SLURM `--nodes=2` does not match. HINT: Set `num_nodes=2`.
 
-(measured, job 1285543).  That check is `SLURMEnvironment.validate_settings`,
+(measured).  That check is `SLURMEnvironment.validate_settings`,
 reached from `_SubprocessScriptLauncher.launch`, and it fires on every rank
 before a single batch is read.  So the multi-node failure mode is a crash, not
 eight processes quietly training four independent models -- but the run still

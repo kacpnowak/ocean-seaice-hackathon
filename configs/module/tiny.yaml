@@ -27,38 +27,17 @@ project: ocean-sea-ice
 depth_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
 n_depths: 13
 
-# Per-GPU batch size. The cluster configs read it through ${module.batch_size}.
-# Timed twice, with different instruments and different answers -- both are here
-# because the difference is the point:
-#   * scripts/benchmark_step.py (torch allocator, compute only, no metrics):
-#     42.61 GiB peak, 0.322 s/step, 24.8 samples/s. Batch 16 reaches 85.0 GiB for
-#     4% more throughput -- not worth the OOM risk, hence 8.
-#     (configs/cluster/jupiter_1gpu.yaml quotes 24.1 samples/s for the same
-#     preset. Not a contradiction and not a rounding difference: 24.8 is
-#     compute only, 24.1 is the same model measured end to end with the
-#     dataloader in the loop -- the ~3% gap IS the data tax that config is
-#     sizing its worker count against.)
-#   * a real `make train-tiny` (nvidia-smi, whole process): 48.6 GiB peak,
-#     0.41 s/step. The extra 0.09 s/step is the metrics: geoarches recomputes
-#     every train metric on every step, and ACC interpolates a monthly
-#     climatology per sample.
-batch_size: 8
+# Per-GPU batch size, read by the cluster configs through ${module.batch_size}.
+# A dc-gpu card is an A100-SXM4-40GB (39.5 GiB usable): 21.44 GiB peak, 0.312 s/step. Batch 8 wants 42.9 GiB and does not fit.
+# Override for a one-off with HYDRA_ARGS="++batch_size=N".
+batch_size: 4
 
-# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
-# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
-# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
-# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
-# working.  Measured with `make benchmark` on a dc-gpu A100: 21.44 GiB peak, 0.312 s/step.
-# From the batch sweep: batch 8 wants 42.9 GiB and does not fit.
-batch_size_40gib: 4
-
-# MEASURED with a stopwatch, not projected: `make train-tiny` on one booster
-# GH200 (bf16-mixed, batch 8, 16 dataloader workers) took **2033 s = 33.9 min**
-# for 4500 steps, so 4500 overshot the 30-minute budget by 13%. The rate that run
-# gives is 0.438 s per step including its share of validation, on top of 62 s of
-# fixed start-up, which puts 4000 steps at 30.2 min. That is where this number
-# comes from; it is a projection from a measured run, so re-time it if you change
-# the metrics, the batch size or the GPU.
+# MEASURED, not projected: on one dc-gpu A100 at the batch size above this
+# preset runs at 1.98 it/s end to end -- dataloader and metrics included -- so
+# 4000 steps is about 34 minutes. `make benchmark` reports 0.312 s/step for the
+# compute alone; the gap between the two is the metrics, which geoarches
+# recomputes on every step, and ACC interpolating a monthly climatology per
+# sample. Re-time it if you change the metrics, the batch size or the card.
 #
 # 4000 steps is 17.5 epochs of the 1825-sample tiny split.
 #

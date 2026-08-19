@@ -1,17 +1,14 @@
 # ---------------------------------------------------------------------------
-# base -- about half a day on ONE GH200.  Same token width as `small` and twice
-# the attention blocks; the same 13 depth levels as every other preset.  This is
-# the default preset and the one the shipped baselines are trained at.
+# base -- same token width as `small` and twice the attention blocks; the same 13
+# depth levels as every other preset.  This is the default preset, and the one
+# the shipped `base_pretrained` was trained at.
 #
-# Not "overnight on four GPUs", which is what this line used to say.  DDP does
-# not divide the wall clock: `max_steps` counts optimiser steps and four GPUs
-# make each one slightly more expensive (measured on `tiny`: 1.33x slower per
-# step for 3.01x the samples per second).  Four GPUs would take LONGER in wall
-# clock than one -- around 14 h -- while seeing four times as much data.  Use
-# them for the data, not for the clock.
+# DDP does not divide the wall clock: `max_steps` counts optimiser steps, and
+# more GPUs make each one slightly more expensive while seeing proportionally
+# more data.  Use them for the data, not for the clock.
 #
 #     srun ... --gres=gpu:4 python -m geoarches.main_hydra --config-path $PWD/configs \
-#         cluster=jupiter_4gpu module=base dataloader=glorys ++name=my_base_run
+#         cluster=jureca_4gpu module=base dataloader=glorys ++name=my_base_run
 #
 # configs/module/tiny.yaml carries the commentary; only the numbers differ here.
 # ---------------------------------------------------------------------------
@@ -22,28 +19,15 @@ project: ocean-sea-ice
 depth_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
 n_depths: 13
 
-# Per-GPU batch size. The cluster configs read it through ${module.batch_size}.
-# Measured on one GH200 (96 GB): 41.42 GiB peak, 0.328 s/step, 6.1 samples/s,
-# by the same benchmark run quoted in configs/module/tiny.yaml. From the batch
-# sweep: batch 4 fits (81.2 GiB) and is only 9% faster per sample, so the smaller
-# batch wins -- more optimiser steps for the same data, and room for validation.
-batch_size: 2
+# Per-GPU batch size, read by the cluster configs through ${module.batch_size}.
+# A dc-gpu card is an A100-SXM4-40GB (39.5 GiB usable): measured with `make benchmark` on a dc-gpu A100; 21.33 GiB peak.
+# Override for a one-off with HYDRA_ARGS="++batch_size=N".
+batch_size: 1
 
-# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
-# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
-# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
-# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
-# working.  Measured with `make benchmark` on a dc-gpu A100: 21.33 GiB peak, 0.322 s/step.
-# From the batch sweep: batch 2 does not fit.
-batch_size_40gib: 1
-
-# Wall clock, and mind which number this is.
-#   * compute only, `make benchmark`:            0.328 s/step
-#   * a REAL training step, measured on
-#     dataloader=glorys at 60 vs 260 steps:      0.3455 s/step
-# 0.3455 x 110000 = 10.6 h, plus ~23 epoch boundaries at ~38 s = about 10.8 h on
-# ONE GH200.  That is a projection from a measured rate: nobody has trained this
-# preset to completion.  See docs/04 section 4.1.
+# Wall clock, measured on the run that produced `base_pretrained`: 84 000 steps
+# on one node of four dc-gpu A100s took 9 h 23 m, at 2.52 it/s.  `make benchmark`
+# prints the step time on the card you are on.
+#
 # save_step_frequency has to divide max_steps, or the final step is never
 # checkpointed: geoarches' callback fires on
 # `global_step % save_step_frequency == 0`. 22000 gives five checkpoints, the

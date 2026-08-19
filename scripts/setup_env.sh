@@ -5,7 +5,7 @@
 #   bash scripts/setup_env.sh          # normal setup
 #   FORCE=1 bash scripts/setup_env.sh  # delete .venv and start over
 #
-# Timing: ~30 s warm, ~5 min cold.  Measured on JUPITER with uv's wheel cache
+# Timing: ~30 s warm, ~5 min cold.  Measured with uv's wheel cache
 # already populated: 20 s for a brand-new .venv, 8 s to re-check an existing one.
 # The first build on a machine has to download ~2 GB of PyTorch, which is the
 # ~5 minutes; every build after that reuses the cache.
@@ -16,13 +16,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # CUDA build of torch, from PyTorch's own index rather than PyPI.
-# On JUPITER (aarch64/GH200) that was mandatory: the PyPI aarch64 wheel is
-# CPU-only. On JURECA (x86_64) PyPI would serve a CUDA build too, but naming the
-# index keeps the CUDA version explicit and one line works on both machines.
+# Naming the index keeps the CUDA version explicit rather than trusting whatever
+# PyPI happens to serve for this platform.
 #
-# A `.venv` from JUPITER CANNOT be copied to JURECA: those wheels are aarch64 and
-# this is x86_64. That is why the move brought the data and the checkpoints but
-# not the environment -- it has to be built here, which is what this script does.
+# A `.venv` is not portable between machines of different architecture -- build
+# it here, which is what this script does.
 TORCH_INDEX="https://download.pytorch.org/whl/cu126"
 PYTHON_VERSION="3.12"
 

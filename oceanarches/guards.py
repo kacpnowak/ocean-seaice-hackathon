@@ -94,12 +94,11 @@ __all__ = [
 #: optional: without it `--cpus-per-task=N` launches N concurrent copies of your
 #: script.
 #:
-#: `CUDA_VISIBLE_DEVICES=0` is NOT here, and was on JUPITER, where the booster
-#: partition allocates whole nodes and handed back all four cards whatever you
-#: asked for. dc-gpu is not whole-node, so `--gres=gpu:1` should really give one.
-#: Check the batch count in epoch 0 the first time anyway: if Lightning sees more
-#: than one device it shards the data across them inside your single process, and
-#: the loss curve looks perfectly normal while you train on a fraction of it.
+#: dc-gpu is not allocated whole-node, so `--gres=gpu:1` really does give one
+#: card and `CUDA_VISIBLE_DEVICES` is not needed. Check the batch count in epoch 0
+#: the first time anyway: if Lightning sees more than one device it shards the
+#: data across them inside your single process, and the loss curve looks perfectly
+#: normal while you train on a fraction of it.
 SRUN_LINES = (
     "srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \\",
     "     --cpus-per-task=12 --time=01:00:00 --pty bash",
@@ -1047,7 +1046,7 @@ def lock_liveness(
 
     Returns:
         `(live, reason)`, the reason phrased to be printed after the lock file's
-        path: "SLURM job 1325538 is no longer in the queue".
+        path: "SLURM job 123456 is no longer in the queue".
     """
     host = hostname or socket.gethostname()
     now = time.time() if now is None else now
@@ -1211,7 +1210,7 @@ def oom_advice(
 
     At `batch_size` 1 there is nothing left to halve, and this used to advise
     `++batch_size=1` -- the value that had just failed.  That is the case a
-    `large` fine-tune on a 40 GiB card hits on its first step, so it gets its own
+    an oversized fine-tune on a 40 GiB card hits on its first step, so it gets its own
     message: with the batch already at 1 and checkpointing already on, the preset
     does not fit the card and no override will change that.
     """
@@ -1295,7 +1294,7 @@ def _provenance(key: str, overrides: Sequence[str], fallback: str) -> str:
 
     Worth being exact about. `max_steps` and `save_step_frequency` interpolate
     `${module.*}`, so they follow the size preset; `batch_size` interpolates
-    `${cluster.batch_size}`, and only the jupiter clusters pass that on to
+    `${cluster.batch_size}`, and only the jureca clusters pass that on to
     `${module.batch_size}` -- `cluster=local` sets 1 outright. Saying "from the
     preset" there would be wrong, and this line exists precisely so that nobody
     has to guess which number a preset swap moved.

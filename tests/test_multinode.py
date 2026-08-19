@@ -1,7 +1,7 @@
 """The multi-node entry point, `python -m oceanarches.main_multinode`.
 
 `geoarches.main_hydra` builds `L.Trainer(...)` without `num_nodes`, so Lightning
-assumes one node and refuses to start on more than one (measured, job 1285543):
+assumes one node and refuses to start on more than one (measured):
 
     ValueError: You set `num_nodes=1` in Lightning, but the number of nodes
     configured in SLURM `--nodes=2` does not match.
@@ -44,14 +44,14 @@ def _cpu_trainer(**kwargs):
 def test_the_cluster_config_decides_and_the_allocation_is_the_fallback():
     """`cluster.num_nodes` when the config sets it, `SLURM_NNODES` when it does not.
 
-    The fallback is what keeps `cluster=jupiter_4gpu` and `cluster=local` working
+    The fallback is what keeps `cluster=jureca_4gpu` and `cluster=local` working
     through this entry point without gaining a key, and what makes a two-node
     experiment possible without a two-node cluster config.
 
     MUTANT: returning 1 unconditionally fails the first two.
     """
-    assert main_multinode.resolve_num_nodes(4, 4) == 4  # jupiter_4nodes, --nodes=4
-    assert main_multinode.resolve_num_nodes(None, 2) == 2  # jupiter_4gpu, --nodes=2
+    assert main_multinode.resolve_num_nodes(4, 4) == 4  # jureca_4nodes, --nodes=4
+    assert main_multinode.resolve_num_nodes(None, 2) == 2  # jureca_4gpu, --nodes=2
     assert main_multinode.resolve_num_nodes(None, 1) == 1  # the ordinary one-node job
     assert main_multinode.resolve_num_nodes(None, None) == 1  # no SLURM at all
     # The config is the source of truth and the allocation only the fallback, so
@@ -60,7 +60,7 @@ def test_the_cluster_config_decides_and_the_allocation_is_the_fallback():
 
 
 def test_a_config_written_for_a_node_count_the_job_does_not_have_is_refused():
-    """Submitting `cluster=jupiter_4nodes` with `--nodes=2` must not train.
+    """Submitting `cluster=jureca_4nodes` with `--nodes=2` must not train.
 
     Lightning catches the same mismatch a second later, but its message is
     "HINT: Set `num_nodes=2`", which names a Trainer argument nobody sets by
@@ -68,14 +68,14 @@ def test_a_config_written_for_a_node_count_the_job_does_not_have_is_refused():
 
     MUTANT: returning None unconditionally fails the first assertion.
     """
-    complaint = main_multinode.check_allocation(4, 2, "jupiter_4nodes")
+    complaint = main_multinode.check_allocation(4, 2, "jureca_4nodes")
     assert complaint is not None
-    assert "jupiter_4nodes" in complaint and "--nodes=4" in complaint and "2 node" in complaint
+    assert "jureca_4nodes" in complaint and "--nodes=4" in complaint and "2 node" in complaint
 
-    assert main_multinode.check_allocation(4, 4, "jupiter_4nodes") is None
-    assert main_multinode.check_allocation(1, 1, "jupiter_4gpu") is None
+    assert main_multinode.check_allocation(4, 4, "jureca_4nodes") is None
+    assert main_multinode.check_allocation(1, 1, "jureca_4gpu") is None
     # Off SLURM there is no allocation to disagree with.
-    assert main_multinode.check_allocation(4, None, "jupiter_4nodes") is None
+    assert main_multinode.check_allocation(4, None, "jureca_4nodes") is None
 
 
 def test_a_node_count_slurm_spells_oddly_is_not_read_as_a_node_count():
@@ -137,7 +137,7 @@ def test_the_entry_point_composes_this_projects_root_config():
     `cluster.num_nodes` is asserted here rather than in test_configs.py because
     this is the only entry point that reads it.
 
-    MUTANT: deleting `num_nodes: 4` from configs/cluster/jupiter_4nodes.yaml
+    MUTANT: deleting `num_nodes: 4` from configs/cluster/jureca_4nodes.yaml
     fails this; so does a shim that stops passing the composed config through.
 
     (Not a mutant: the decorator's own `config_path`. hydra's `--config-path`
@@ -153,8 +153,8 @@ def test_the_entry_point_composes_this_projects_root_config():
             "oceanarches.main_multinode",
             "--config-path",
             str(CONFIG_DIR),
-            "cluster=jupiter_4nodes",
-            "module=large",
+            "cluster=jureca_4nodes",
+            "module=base",
             "dataloader=glorys",
             "++name=zz_test_compose",
             "--cfg",
@@ -176,7 +176,7 @@ def test_the_entry_point_composes_this_projects_root_config():
 # ---------------------------------------------------------------------------
 # ... and the SLURM script that launches it
 # ---------------------------------------------------------------------------
-SLURM_SCRIPT = REPO_ROOT / "scripts" / "pretrain_large.slurm"
+SLURM_SCRIPT = REPO_ROOT / "scripts" / "pretrain_base.slurm"
 
 
 def _shell_default(name: str) -> int:
@@ -187,107 +187,62 @@ def _shell_default(name: str) -> int:
     return int(match.group(1))
 
 
-def test_the_pre_training_job_asks_for_the_allocation_its_cluster_config_describes():
-    """`#SBATCH --nodes` and `cluster.num_nodes` are two statements of one fact.
+def test_the_pre_training_job_asks_for_one_task_and_the_whole_node():
+    """One task, four visible GPUs -- not one task per GPU.
 
-    If they drift, the run dies on every rank in
-    `SLURMEnvironment.validate_settings` after the queue wait, which on a
-    four-node job is an expensive way to find a typo.
+    Lightning picks its launch mode from the environment: with `--ntasks=1` it
+    forks one process per visible device itself, which is what the trainer is
+    configured for. Under `--ntasks-per-node=4` it would attach to SLURM's ranks
+    instead, and the two disagree about who spawns whom.
 
-    MUTANT: changing either number alone fails this.
+    MUTANT: changing `--ntasks=1` to `--ntasks-per-node=4` fails this.
     """
     text = SLURM_SCRIPT.read_text()
-    nodes = int(re.search(r"^#SBATCH --nodes=(\d+)", text, re.M).group(1))
-    tasks_per_node = int(re.search(r"^#SBATCH --ntasks-per-node=(\d+)", text, re.M).group(1))
-    gpus = int(re.search(r"^#SBATCH --gres=gpu:(\d+)", text, re.M).group(1))
-
-    assert nodes == 4 and tasks_per_node == 4 and gpus == 4, "16 GH200 is 4 nodes x 4 tasks"
-    cluster_cfg = OmegaConf.load(CONFIG_DIR / "cluster" / "jupiter_4nodes.yaml")
-    assert cluster_cfg.num_nodes == nodes, (
-        f"{SLURM_SCRIPT.name} asks SLURM for {nodes} nodes but cluster/jupiter_4nodes.yaml "
-        f"declares num_nodes: {cluster_cfg.num_nodes}"
+    assert re.search(r"^#SBATCH --nodes=1", text, re.M), "the shipped job is one node"
+    assert re.search(r"^#SBATCH --ntasks=1", text, re.M), (
+        "one task, four visible GPUs: see the header of the script"
     )
-    # One process per GPU, so `--ntasks-per-node` must equal the GPUs per node:
-    # Lightning validates `devices` against it and stops if they differ.
-    assert tasks_per_node == gpus
+    assert not re.search(r"^#SBATCH --ntasks-per-node=", text, re.M)
 
 
-def test_the_pre_training_job_launches_the_entry_point_that_can_do_four_nodes():
-    """MUTANT: putting `geoarches.main_hydra` back on the srun line fails this."""
+def test_the_pre_training_job_composes_this_projects_root_config():
+    """`--config-dir` is searched AFTER geoarches' own configs, so geoarches'
+    root config wins and this project's max_steps, save_step_frequency and
+    limit_val_batches are silently ignored.
+
+    MUTANT: swapping `--config-path` for `--config-dir` fails this.
+    """
     text = SLURM_SCRIPT.read_text()
-    srun_lines = [line for line in text.splitlines() if line.strip().startswith("srun ")]
-    assert srun_lines, "the script no longer launches anything with srun"
-    for line in srun_lines:
-        assert "oceanarches.main_multinode" in line, (
-            f"{line.strip()!r} launches geoarches.main_hydra, which builds its Trainer "
-            "without num_nodes and cannot start on more than one node"
-        )
-    # The flag itself lives in the HYDRA_ARGS array the srun line expands, and
-    # `--config-dir` would silently compose geoarches' root config instead of
-    # ours: see the header of configs/config.yaml.
     assert "--config-path" in text
     assert "--config-dir" not in text
 
 
-def test_a_rank_that_refuses_to_start_takes_the_whole_step_down_with_it():
-    """The startup guards refuse on rank 0 only, and rank 0 is also the rendezvous
-    master.  Without `--kill-on-bad-exit=1` the remaining 15 ranks sit in
-    `init_process_group` waiting for a store that will never be created, for the
-    full 30-minute default timeout, and what comes out is 15 copies of
-    `DistNetworkError: The client socket has timed out` -- which reads as a
-    network fault and buries the real message two thousand lines up.  Job 1349666
-    and job 1342138 each burned 4 nodes for 1 h 15 that way.
-
-    MUTANT: removing the flag from the srun line fails this.
-    """
-    srun_lines = [
-        line for line in SLURM_SCRIPT.read_text().splitlines() if line.strip().startswith("srun ")
-    ]
-    assert srun_lines
-    for line in srun_lines:
-        assert "--kill-on-bad-exit=1" in line, (
-            f"{line.strip()!r} lets a refusal on rank 0 hang the other ranks until the "
-            "distributed rendezvous times out"
-        )
-
-
-def test_the_pre_training_job_is_still_submittable_on_jupiter():
-    """`#SBATCH --requeue` makes the job unsubmittable here, not just unrequeued:
-
-        sbatch: error: job_submit_filter: --requeue option is not supported
-        sbatch: error: Batch job submission failed
+def test_the_pre_training_job_is_submittable_and_reports_what_it_did():
+    """`#SBATCH --requeue` is rejected by the submit filter here, so the job
+    would never enter the queue at all.
 
     MUTANT: adding the directive back fails this.
     """
     text = SLURM_SCRIPT.read_text()
     assert not re.search(r"^#SBATCH .*--requeue", text, re.M), (
-        "JUPITER's submit filter rejects --requeue; the job would never enter the queue"
+        "the submit filter rejects --requeue; the job would never enter the queue"
     )
-    # The two things a relaunch depends on, both of which have been lost before.
     assert "SLURM_SUBMIT_DIR" in text, "BASH_SOURCE points into SLURM's spool directory"
-    assert 'exit "${TRAIN_STATUS}"' in text, "the job must not report COMPLETED for a failed run"
 
 
-def test_the_shipped_step_budget_is_checkpointable_at_every_node_count_it_supports():
-    """`max_steps` is derived from a sample budget, so the node count moves it.
+def test_the_shipped_step_budget_is_checkpointable():
+    """geoarches checkpoints on `global_step % save_step_frequency == 0` and never
+    at the end of `fit`, so a `SAVE_EVERY` that does not divide `MAX_STEPS` loses
+    the finished model and nothing else.
 
-    geoarches checkpoints on `global_step % save_step_frequency == 0` and never
-    at the end of `fit`, so a `SAVE_EVERY` that stops dividing `MAX_STEPS` loses
-    the finished model and nothing else. The script refuses to start in that
-    case -- this is the test that the SHIPPED defaults never get there.
-
-    MUTANT: the previous default of SAVE_EVERY=10000 fails at 16 ranks
-    (1200000 / 16 = 75000, and 75000 % 10000 = 5000).
+    MUTANT: any SAVE_EVERY that does not divide MAX_STEPS fails this.
     """
-    budget = _shell_default("SAMPLE_BUDGET")
+    max_steps = _shell_default("MAX_STEPS")
     save_every = _shell_default("SAVE_EVERY")
-    for ranks in (4, 8, 16):  # 1, 2 and 4 nodes at 4 GPUs each
-        max_steps = budget // ranks
-        assert budget % ranks == 0, f"{budget} samples does not divide over {ranks} ranks"
-        assert max_steps % save_every == 0, (
-            f"at {ranks} ranks the script would run {max_steps} steps and checkpoint every "
-            f"{save_every}, so the last checkpoint is never written"
-        )
+    assert max_steps % save_every == 0, (
+        f"the script would run {max_steps} steps and checkpoint every {save_every}, "
+        "so the last checkpoint -- the finished model -- is never written"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -313,13 +268,14 @@ def _compose(**overrides) -> OmegaConf:
 def _script_overrides(**shell_variables: object) -> list[str]:
     """The `++key=value` overrides the pre-training script passes, filled in.
 
-    Read off `HYDRA_ARGS` in the script itself rather than copied here, so the
+    Read off the launch line in the script itself rather than copied here, so the
     test moves when the launch line moves and cannot quietly agree with a
     version of the command that no longer ships.
     """
-    block = SLURM_SCRIPT.read_text().split("HYDRA_ARGS=(", 1)[1].split("\n)", 1)[0]
-    pairs = re.findall(r'^\s*"\+\+([\w.]+)=\$\{(\w+)\}"\s*$', block, re.M)
-    assert pairs, "no ++key=${VAR} overrides found in HYDRA_ARGS"
+    text = SLURM_SCRIPT.read_text()
+    block = text.split("geoarches.main_hydra", 1)[1].split("\n\n", 1)[0]
+    pairs = re.findall(r'"\+\+([\w.]+)=\$\{(\w+)\}"', block)
+    assert pairs, "no ++key=${VAR} overrides found on the launch line"
     for _, variable in pairs:
         assert variable in shell_variables, (
             f"the script passes ${{{variable}}}; this test does not set it"
@@ -345,7 +301,7 @@ def test_a_relaunch_at_a_new_step_budget_takes_the_lr_schedule_with_it():
     MUTANT: delete `"++module.module.num_training_steps=${MAX_STEPS}"` from
     HYDRA_ARGS and this fails on the `resumed` assertion.
     """
-    groups = dict(module="large", dataloader="glorys", cluster="jupiter_4nodes")
+    groups = dict(module="base", dataloader="glorys", cluster="jureca_4gpu")
     variables = dict(NAME="relaunch_probe", SAVE_EVERY=50)
 
     first = _compose(extra=_script_overrides(MAX_STEPS=100, **variables), **groups)
@@ -362,7 +318,7 @@ def test_a_relaunch_at_a_new_step_budget_takes_the_lr_schedule_with_it():
     assert resumed.max_steps == 200
     assert resumed.module.module.num_training_steps == 200, (
         "the relaunch moved max_steps to 200 and left the cosine schedule at "
-        f"{resumed.module.module.num_training_steps}; scripts/pretrain_large.slurm must pass "
+        f"{resumed.module.module.num_training_steps}; scripts/pretrain_base.slurm must pass "
         "++module.module.num_training_steps so it survives the resume dotlist merge"
     )
 

@@ -1,21 +1,16 @@
 # Four JURECA dc-gpu nodes: 16 GPUs, 4 processes per node.
-# This is the ORGANISERS' pre-training configuration; a participant wants
-# jureca_1gpu or jureca_4gpu.
+# This is the ORGANISERS' configuration; a participant wants jureca_1gpu or
+# jureca_4gpu.
 #
-# This is how you would train `large` yourself, and at the hackathon it is the
-# ONLY way to get one: no pre-trained `large` ships with the kit any more.  Note
-# that `large` does not fit a dc-gpu A100 even at batch 1 with gradient
-# checkpointing (see configs/module/large.yaml), so this config cannot train it
-# here either -- it is kept for a machine whose cards are big enough.
+# You are unlikely to need it: the pre-trained `base_pretrained` that ships with
+# the kit was trained on ONE node, and fine-tuning it needs one GPU.
 #
-#   sbatch scripts/pretrain_large.slurm
-#
-# or by hand -- and note the entry point, which is NOT geoarches.main_hydra:
+# Note the entry point, which is NOT geoarches.main_hydra:
 #
 #   srun --account=training2635 --partition=dc-gpu --nodes=4 --ntasks-per-node=4 \
 #        --gres=gpu:4 --cpus-per-task=12 \
 #        .venv/bin/python -m oceanarches.main_multinode --config-path $PWD/configs \
-#        cluster=jureca_4nodes module=large dataloader=glorys ++name=my_run
+#        cluster=jureca_4nodes module=base dataloader=glorys ++name=my_run
 #
 # `geoarches.main_hydra` builds its trainer without `num_nodes`, so Lightning
 # assumes one node and refuses to start on four:
@@ -23,28 +18,22 @@
 #   ValueError: You set `num_nodes=1` in Lightning, but the number of nodes
 #   configured in SLURM `--nodes=4` does not match. HINT: Set `num_nodes=4`.
 #
-# `oceanarches.main_multinode` is a small shim -- about fifty lines of code under
-# a much longer explanation -- that supplies `num_nodes` and then hands the
-# composed config to geoarches' own `main`; nothing is forked.
-# Read its header before changing anything here.
+# `oceanarches.main_multinode` is a small shim that supplies `num_nodes` and then
+# hands the composed config to geoarches' own `main`; nothing is forked.
 #
-# The step budget in scripts/pretrain_large.slurm is derived from a SAMPLE
-# budget divided by the world size, so it adapts to the node count on its own.
-# The wall clock will not: the 18 hours the JUPITER run took were 16 GH200s, and
-# the same 75 000 steps on 16 dc-gpu cards will take longer. Check the QOS limit
-# on this partition before assuming one launch is enough -- the script resumes
-# from the newest checkpoint, and since the lock now asks squeue whether the job
-# that wrote it still exists, a relaunch after a wall-clock kill just works.
+# The step budget in the pre-training script is derived from a SAMPLE budget
+# divided by the world size, so it adapts to the node count on its own. Check the
+# QOS wall-clock cap on dc-gpu before assuming one launch is enough -- the script
+# resumes from the newest checkpoint, and the run lock asks squeue whether the
+# job that wrote it still exists, so a relaunch after a wall-clock kill works.
 #
-# Offline wandb on purpose; see configs/cluster/jureca_1gpu.yaml.
 wandb_mode: offline
 use_custom_requeue: False
 
 precision: bf16-mixed
-# Per-GPU batch, the 40 GiB number: every JURECA dc-gpu card is an
-# A100-SXM4-40GB, however many nodes you take.  See
-# configs/cluster/jureca_1gpu.yaml for why this is not ${module.batch_size}.
-batch_size: ${module.batch_size_40gib} # per GPU; see configs/module/*.yaml
+# Per-GPU batch, from the size preset. Every dc-gpu card is an A100-SXM4-40GB,
+# however many nodes you take.
+batch_size: ${module.batch_size} # per GPU; see configs/module/*.yaml
 
 # Per process, and deliberately the same as on one node: what constrains it is
 # cores per NODE, and there are still four processes on each node, so nothing
@@ -63,4 +52,4 @@ num_nodes: 4
 # It configures `python -m geoarches.submit`, which submits a job that runs
 # `geoarches.main_hydra` -- the entry point that cannot do multi-node. A
 # launcher block with `nodes: 4` would compose fine and then fail in Lightning
-# on every rank. Use `sbatch scripts/pretrain_large.slurm`.
+# on every rank. Use `sbatch scripts/pretrain_base.slurm`, or the srun line above.

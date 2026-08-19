@@ -92,7 +92,7 @@ def test_a_run_whose_final_step_is_never_checkpointed_is_refused():
 
 def test_the_shipped_budgets_are_not_refused():
     """Every preset ships a `max_steps` its `save_step_frequency` divides."""
-    for preset in ("tiny", "small", "base", "large", "ocean_component", "seaice_component"):
+    for preset in ("tiny", "small", "base", "ocean_component", "seaice_component"):
         cfg = OmegaConf.load(CONFIG_DIR / "module" / f"{preset}.yaml")
         assert guards.no_checkpoint_refusal(cfg.max_steps, cfg.save_step_frequency, preset) is None
 
@@ -249,7 +249,7 @@ def test_a_visible_gpu_does_not_count_as_an_allocation():
     while another user's job held 49 GiB of the card three participants then
     trained on.
     """
-    message = guards.allocation_warning({}, hostname="jpbl-s02-02", cluster_name="jupiter_1gpu")
+    message = guards.allocation_warning({}, hostname="jrlogin01", cluster_name="jureca_1gpu")
     assert message is not None
     assert "SLURM_JOB_ID" in message and "srun" in message
 
@@ -257,7 +257,7 @@ def test_a_visible_gpu_does_not_count_as_an_allocation():
 def test_an_allocation_silences_it():
     assert (
         guards.allocation_warning(
-            {"SLURM_JOB_ID": "1285543"}, hostname="jpbo-b-001", cluster_name="jupiter_1gpu"
+            {"SLURM_JOB_ID": "123456"}, hostname="jrc0001", cluster_name="jureca_1gpu"
         )
         is None
     )
@@ -265,7 +265,7 @@ def test_an_allocation_silences_it():
 
 def test_the_cpu_cluster_config_is_exempt():
     """`cluster=local` says "no GPU, one sample" outright; warning about it is noise."""
-    assert guards.allocation_warning({}, hostname="jpbl-s02-02", cluster_name="local") is None
+    assert guards.allocation_warning({}, hostname="jrlogin01", cluster_name="local") is None
 
 
 def test_doctor_warns_about_the_missing_allocation_even_with_a_gpu(monkeypatch):
@@ -447,7 +447,7 @@ def test_warn_allocation_prints_the_complaint_and_returns_it(capsys, monkeypatch
     about.
     """
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-    said = guards.warn_allocation(cluster_name="jupiter_1gpu", env={}, hostname="jpbl-s02-02")
+    said = guards.warn_allocation(cluster_name="jureca_1gpu", env={}, hostname="jrlogin01")
     out = capsys.readouterr().out
     assert said is not None
     assert "[oceanarches] WARNING:" in out
@@ -467,7 +467,7 @@ def test_the_cpu_escape_is_spelled_for_the_entry_point_that_prints_it():
     the reader to a dead end, which is why this is a parameter and not an
     addendum printed afterwards.
     """
-    training = guards.allocation_warning({}, hostname="h", cluster_name="jupiter_1gpu")
+    training = guards.allocation_warning({}, hostname="h", cluster_name="jureca_1gpu")
     evaluation = guards.allocation_warning(
         {}, hostname="h", cluster_name=None, cpu_hint="--device cpu"
     )
@@ -475,7 +475,7 @@ def test_the_cpu_escape_is_spelled_for_the_entry_point_that_prints_it():
     assert "`--device cpu` if you really do mean" in evaluation
     # ... and an entry point with no cluster config does not print `cluster=?`.
     assert "cluster=" not in evaluation.splitlines()[0]
-    assert "cluster=jupiter_1gpu" in training.splitlines()[0]
+    assert "cluster=jureca_1gpu" in training.splitlines()[0]
 
 
 def test_the_pause_waits_on_a_tty_and_never_anywhere_else(monkeypatch):
@@ -485,18 +485,18 @@ def test_the_pause_waits_on_a_tty_and_never_anywhere_else(monkeypatch):
     monkeypatch.delenv("OCEANARCHES_SKIP_GUARDS", raising=False)
 
     monkeypatch.setattr(guards.sys.stdout, "isatty", lambda: False, raising=False)
-    guards.warn_allocation(env={}, hostname="jpbl-s02-02")
+    guards.warn_allocation(env={}, hostname="jrlogin01")
     assert slept == [], "paused with nothing watching"
 
     monkeypatch.setattr(guards.sys.stdout, "isatty", lambda: True, raising=False)
-    guards.warn_allocation(env={}, hostname="jpbl-s02-02")
+    guards.warn_allocation(env={}, hostname="jrlogin01")
     assert slept == [10], "no pause on a tty, so Ctrl-C is impossible"
 
     # ... and the documented escape hatch turns it off, through the one public
     # truthiness rule rather than a second copy of it.
     monkeypatch.setenv("OCEANARCHES_SKIP_GUARDS", "1")
     assert guards.skip_guards() is True
-    guards.warn_allocation(env={}, hostname="jpbl-s02-02")
+    guards.warn_allocation(env={}, hostname="jrlogin01")
     assert slept == [10], "OCEANARCHES_SKIP_GUARDS did not skip the pause"
 
     monkeypatch.setenv("OCEANARCHES_SKIP_GUARDS", "0")
@@ -507,7 +507,7 @@ def test_pause_false_is_honoured(monkeypatch):
     slept: list[float] = []
     monkeypatch.setattr(guards.time, "sleep", lambda seconds: slept.append(seconds))
     monkeypatch.setattr(guards.sys.stdout, "isatty", lambda: True, raising=False)
-    guards.warn_allocation(env={}, hostname="jpbl-s02-02", pause=False)
+    guards.warn_allocation(env={}, hostname="jrlogin01", pause=False)
     assert slept == []
 
 
@@ -623,7 +623,7 @@ def test_the_real_doctor_run_includes_the_depth_row():
 # ---------------------------------------------------------------------------
 # 10. The keys a guesser actually reaches for
 # ---------------------------------------------------------------------------
-# Round 2 of the participant rehearsal: `++lr=` was hard-refused with the right
+# `++lr=` was hard-refused with the right
 # answer, while `++module.embed_dim=512`, `++module.module.embed_dim=512` and
 # `++dataloader.n_levels=20` -- equally natural guesses -- got a soft,
 # dismissible "may be intended" warning and then trained the unchanged network.
@@ -849,7 +849,7 @@ def test_a_lock_left_by_a_slurm_job_that_has_ended_is_taken_over(tmp_path, monke
 
     SLURM enforces the wall clock with SIGKILL, so `atexit` never runs and the
     lock outlives the job.  The very next thing anybody does is resubmit to
-    continue from the last checkpoint -- and job 1349666, which was exactly that
+    continue from the last checkpoint -- and a relaunch, which was exactly that
     resubmission, was refused by the lock of the 12-hour run it was meant to
     continue.  The lock was 20 minutes old and from another host, so nothing in
     the age or the hostname could tell; only the job id could.
@@ -932,7 +932,7 @@ def test_squeue_is_read_the_way_slurm_actually_answers(monkeypatch, result, expe
     assert guards.slurm_job_is_running("1325538") is expected
 
 
-@pytest.mark.parametrize("job_id", [None, "", "; rm -rf /", "large_pretrained", "1234; ls"])
+@pytest.mark.parametrize("job_id", [None, "", "; rm -rf /", "my_run_name", "1234; ls"])
 def test_only_a_job_id_shaped_job_id_reaches_a_subprocess(monkeypatch, job_id):
     """The id comes out of a file on disk.  Nothing that is not a job id is handed
     to `squeue`, and the caller falls back to the host and age checks instead."""
@@ -963,7 +963,7 @@ def test_a_slow_or_missing_squeue_falls_back_rather_than_hanging(monkeypatch):
 def test_both_messages_say_how_the_lock_was_judged(tmp_path, monkeypatch, capsys):
     """`still running: assumed, not checked` is the honest thing to print when the
     guard could not ask, and a takeover must say what it concluded -- the refusal
-    that cost job 1349666 gave the reader no way to tell which it was."""
+    that this replaces gave the reader no way to tell which it was."""
     info = {
         "host": "jpbo-002-25",
         "pid": 326978,
@@ -971,9 +971,9 @@ def test_both_messages_say_how_the_lock_was_judged(tmp_path, monkeypatch, capsys
         "started": time.time(),
     }
     refusal = guards.concurrent_run_refusal(
-        "large_pretrained", tmp_path, info, reason="SLURM job 1325538 is still in the queue"
+        "my_run", tmp_path, info, reason="SLURM job 123456 is still in the queue"
     )
-    assert "SLURM job 1325538 is still in the queue" in refusal
+    assert "SLURM job 123456 is still in the queue" in refusal
     assert "squeue -j 1325538" in refusal
 
     guards.run_lock_path(tmp_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1100,7 +1100,7 @@ def test_an_out_of_memory_death_names_batch_size_and_not_the_allocator():
 
 
 def test_at_batch_size_one_the_advice_stops_telling_you_to_halve_it():
-    """Measured on JURECA: a `large` fine-tune OOMs on its first step at
+    """Measured: an oversized fine-tune OOMs on its first step at
     `batch_size` 1 with `gradient_checkpointing` already True, and the advice read
     ``halve it  HYDRA_ARGS="++batch_size=1"`` -- the value that had just failed.
 
@@ -1110,7 +1110,7 @@ def test_at_batch_size_one_the_advice_stops_telling_you_to_halve_it():
     err = RuntimeError("CUDA out of memory. Tried to allocate 86 MiB")
 
     # Both levers already at their limit: say so, and do not suggest an override.
-    advice = guards.oom_advice(err, 1, "large", gradient_checkpointing=True)
+    advice = guards.oom_advice(err, 1, "base", gradient_checkpointing=True)
     assert advice is not None
     assert "++batch_size=1" not in advice, "1 is what just failed"
     assert "no override that fixes it" in advice

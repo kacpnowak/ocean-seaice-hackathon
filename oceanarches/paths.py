@@ -26,8 +26,7 @@ STATS_DIR = Path(__file__).resolve().parent / "stats"
 
 # Fallbacks for a key config.env does not set. Configured for JURECA (project
 # training2635): the data paths default into the checkout, because that is where
-# the copied data lives here and JUPITER's /e/data1 and /e/scratch -- that
-# machine's Exascale filesystems -- are not mounted on JURECA at all.
+# the copied data lives, under the project directory on /p/scratch.
 _DEFAULTS = {
     "GLORYS_RAW": str(REPO_ROOT / "data" / "glorys_1deg_raw"),
     "DATA_ROOT": str(REPO_ROOT / "data"),
@@ -49,9 +48,9 @@ def _value(raw: str) -> str:
     comment, but the parser used to take everything after the ``=`` and merely
     peel off surrounding quotes, so
 
-        SLURM_ACCOUNT="training2635"    # JUPITER was: hclimrep
+        SLURM_ACCOUNT="training2635"    # the project account
 
-    read back as ``training2635"    # JUPITER was: hclimrep``.  Nothing has read
+    read back as ``training2635"    # the project account``.  Nothing has read
     those two keys through this module, so it never showed -- but a participant
     who annotates a path the same way (``GLORYS_PREPPED="/my/copy"  # mine``)
     gets a corrupted path and an error that names a directory they never typed.
@@ -163,8 +162,7 @@ def forcing_stats_file() -> Path:
 # on `RUN = "notebook_probe"`, a name that also exists in the shared store.  Run
 # top to bottom against a writable share that deletes a shipped checkpoint out
 # from under everyone else, and `ignore_errors=True` means it says nothing
-# either way.  It survived the rehearsal only because the share was mounted
-# read-only.
+# either way.  It is only safe when the shared store is mounted read-only.
 #
 # So the deletion goes through one function that refuses anything which is not
 # the caller's own directory, and reports what it did.

@@ -280,7 +280,7 @@ def test_a_missing_forcing_archive_warns_rather_than_fails(tmp_path, monkeypatch
 # ---------------------------------------------------------------------------
 def test_a_trailing_comment_is_not_part_of_the_value(tmp_path, monkeypatch):
     """Measured on the shipped file itself: `SLURM_ACCOUNT="training2635"  # ...`
-    read back as `training2635"    # JUPITER was: hclimrep`.
+    read back as `training2635"    # the project account`.
 
     Nothing reads those two keys through this module, so it stayed invisible --
     but the same annotation on a path (`GLORYS_PREPPED="/my/copy"  # mine`) hands

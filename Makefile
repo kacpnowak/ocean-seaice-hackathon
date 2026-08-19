@@ -59,10 +59,7 @@ HYDRA_ARGS ?=
 # There is a jureca_4nodes too, but `make train` cannot use it: more than one
 # node needs `python -m oceanarches.main_multinode` rather than
 # `geoarches.main_hydra`, which builds its Trainer without `num_nodes`. That is
-# what scripts/pretrain_large.slurm runs.
-# The jupiter_* configs are kept for the machine this kit was built on; the
-# batch sizes in configs/module/*.yaml were measured there, on 96 GB GH200s, and
-# have NOT been re-measured on JURECA -- run `make benchmark` first.
+# what scripts/pretrain_base.slurm runs.
 CLUSTER ?= jureca_1gpu
 YEARS ?=
 LEAD_DAYS ?= 10

@@ -9,7 +9,7 @@ symlinks into a checkpoint store shared with the whole room, and
 ``notebook_probe`` exists in that store as well: a participant running the
 notebook top to bottom against a *writable* share deleted a shipped checkpoint
 out from under everybody else, and ``ignore_errors=True`` swallowed the evidence
-whether it worked or not.  The rehearsal survived it only because the share
+whether it worked or not.  It is only survivable because the share
 happened to be mounted read-only.
 
 Both of the shapes docs/01 produces are reconstructed here with real symlinks and
@@ -218,7 +218,7 @@ def test_the_documented_symlink_loop_ships_exactly_the_protected_runs():
     """`SHIPPED_RUNS` and docs/01 section 1.1 are the same list, or the kit lies.
 
     Adding a run to the shared store means naming it in four places (see
-    docs/TUTORS.md section 2): the store itself, `SHIPPED_RUNS`, the `for run in
+    the store itself, `SHIPPED_RUNS`, the `for run in
     ...` loop participants copy out of docs/01, and a release. Miss the loop and
     nobody links the new run in -- the checkpoint is there and every document
     that loads it by name fails. Miss `SHIPPED_RUNS` and the kit will let a

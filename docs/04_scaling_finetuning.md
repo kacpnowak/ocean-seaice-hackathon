@@ -29,7 +29,6 @@ says which numbers disagree, but you still have to move them yourself:
 | `tiny` | 96 | `[3, 6, 6, 3]` | 96 | 192 |
 | `small` | 192 | `[6, 12, 12, 6]` | 192 | 384 |
 | `base` | 192 | `[6, 12, 12, 6]` | 192 | 384 |
-| `large` | 384 | `[12, 24, 24, 12]` | 384 | 768 |
 
 The rules, which `tests/test_configs.py::test_backbone_and_embedder_agree` pins
 for the shipped presets and the module re-checks on every override:
@@ -47,15 +46,14 @@ make train-tiny NAME=wider HYDRA_ARGS="++module.backbone.emb_dim=192 \
 
 or just `make train MODULE=small`, which is that plus a step budget.
 
-| preset | `emb_dim` | `depth_mult` | parameters | ms per sample | batch | peak GPU | `max_steps` | wall clock |
-|---|---|---|---|---|---|---|---|---|
-| `tiny` | 96 | 1 | **13.2 M** | 40.2 | 8 | 42.6 GiB | 4000 | **31 min** (measured) |
-| `small` | 192 | 1 | **45.0 M** | 75.5 | 4 | 42.2 GiB | 40000 | ~3.6 h (projected) |
-| `base` | 192 | 2 | **84.6 M** | 163.8 | 2 | 41.4 GiB | 110000 | ~10.8 h (projected) |
-| `large` | 384 | 3 | **459.6 M** | 542.3 | 1 | 50.8 GiB | 300000 | ~50 h (projected) |
+| preset | `emb_dim` | `depth_mult` | parameters | batch | `max_steps` | wall clock |
+|---|---|---|---|---|---|---|
+| `tiny` | 96 | 1 | **13.2 M** | 4 | 4000 | **~34 min** (measured) |
+| `small` | 192 | 1 | **45.0 M** | 2 | 40000 | run `make benchmark` |
+| `base` | 192 | 2 | **84.6 M** | 1 | 84000 | **9 h 23 m** on four GPUs (measured) |
 
-Measured on one GH200 in `bf16-mixed`, median of 12 steps after 5 warm-up steps,
-by `make benchmark`.
+`batch` is per GPU, and every one of them is measured to fit a dc-gpu
+A100-SXM4-40GB: `tiny` peaks at 21.44 GiB, `base` at 21.33 GiB.
 
 **The parameter column is backbone + embedder.** Lightning's own summary during
 training prints the whole module and is therefore larger -- 13.465 M for `tiny`
@@ -63,181 +61,31 @@ against the 13.2 M here -- because it also counts the two timestep embedders tha
 carry the month and hour conditioning. Neither is wrong; just do not compare one
 against the other.
 
-### The wall clocks: what is measured and what is projected
+### What the wall clocks mean
 
-**Only `tiny`'s wall clock is a stopwatch measurement** (1851 s for the whole
-`make train-tiny`, [see docs/03](03_first_model.md#33-the-measured-wall-clock)).
-Nobody has ever run `small`, `base` or `large` to completion, so those three
-numbers are projections and this section says exactly what they are projected
-from.
+Two of the three are measured. `tiny` runs at 1.98 it/s end to end -- dataloader
+and metrics included -- so 4000 steps is about 34 minutes. `base_pretrained` took
+9 h 23 m for 84 000 steps on one node of four GPUs, at 2.52 it/s. Nobody has run
+`small` to completion; `make benchmark` will give you the step time on the card
+you are actually on, which is the only number worth planning a job against.
 
-What *has* been measured for all four is the **real training-step time**: a real
-run on the real archive with the metrics on, timed at 60 and at 260 steps so the
-slope cancels start-up, all four on `dataloader=glorys` so that none of them
-crosses an epoch boundary inside the window. One GH200, `bf16-mixed`:
+`tiny` also pays a noticeable overhead at epoch boundaries: it runs on
+`glorys_tiny`, whose epoch is only 229 batches, so 4000 steps is 17.5 epochs of
+validation and dataloader respawn. The other presets run on `glorys`, whose epoch
+is several times longer, so they pay it far less often.
 
-| preset | measured s/step | measured ms/sample | `make benchmark` ms/sample | ratio | `max_steps` x s/step |
-|---|---|---|---|---|---|
-| `tiny` | 0.2814 | 35.2 | 40.2 | 0.87 | 0.31 h |
-| `small` | 0.3105 | 77.6 | 75.5 | 1.03 | **3.45 h** |
-| `base` | 0.3455 | 172.7 | 163.8 | 1.05 | **10.6 h** |
-| `large` | 0.5909 | 590.9 | 542.3 | 1.09 | **49.2 h** |
+### What more GPUs buy
 
-An earlier version of this page told you to multiply the projections by ~1.4,
-because `make benchmark` projects `tiny` at 22 minutes and the stopwatch says 31.
-**That advice was wrong and is withdrawn.** The step time itself needs a factor
-of 1.03-1.09, not 1.4. `tiny`'s missing nine minutes are *epoch boundaries*:
+**Data, not wall clock.** `max_steps` counts optimiser steps, and DDP does not
+divide them: four ranks make each step slightly more expensive while showing the
+model four times as many samples. A four-GPU run of the same `max_steps` takes
+about the same wall clock -- or a little more -- and sees four times the data,
+with an effective batch of `4 x batch_size`.
 
-```
-4000 steps x 0.2814 s      = 1126 s   training
-                             +61 s    start-up (measured intercept)
-17.5 epochs x ~38 s        = +664 s   validation + dataloader respawn
-                            ------
-                             1851 s   which is the stopwatch number
-```
-
-`tiny` runs on `glorys_tiny`, whose epoch is only 229 batches, so 4000 steps is
-17.5 epochs of it. The other three run on `glorys`, whose epoch is 5x longer
-(2372, 4744 and 9488 batches at their batch sizes), so they pay that overhead
-fewer times relative to a much longer run:
-
-| preset | epochs | epoch overhead at ~38 s | steps x s/step | total | overhead as a share |
-|---|---|---|---|---|---|
-| `small` | 16.9 | 0.18 h | 3.45 h | **~3.6 h** | 5.2% |
-| `base` | 23.2 | 0.25 h | 10.56 h | **~10.8 h** | 2.3% |
-| `large` | 31.6 | 0.33 h | 49.24 h | **~50 h** | 0.7% |
-
-(An earlier draft of this section called that overhead "under 1%" for all three.
-It is only under 1% for `large`.)
-
-Two caveats that keep these honest. The per-epoch cost above (~38 s) is `tiny`'s
-and has not been measured for the others -- their validation loops are longer
-(`large` uses `limit_val_batches: 64`) and their batches are smaller. And a
-projection is not a measurement: if you are the first person to run `base` to
-the end, please write down what it actually took.
-
-Re-running `make benchmark` on a different node reproduced the table to within
-3% (41.0 / 78.0 / 160.9 / 551.9 ms per sample, parameters and peak memory
-identical), which is about the noise you should expect.
-
-### What four GPUs actually buy, measured
-
-`base` and `large` want more than one GPU, and `cluster=jupiter_4gpu` gives you a
-whole node. **It does not divide the wall clock by four.** An earlier version of
-this page said it did; that was wrong, and here is the measurement that settles
-it -- `tiny` on `glorys_tiny`, one booster node, the same commit, 100 and 500
-steps so that the slope cancels start-up:
-
-| | batches per epoch | s per optimiser step | samples/s | start-up |
-|---|---|---|---|---|
-| 1 GPU (`jupiter_1gpu`) | 229 | 0.4300 | 18.6 | 17 s |
-| 4 GPU (`jupiter_4gpu`, DDP) | **58** | 0.5717 | 56.0 | 78 s |
-
-`max_steps` counts **optimiser** steps, and on four GPUs one optimiser step is
-still one forward and backward plus an all-reduce -- so a step got **1.33x
-slower**, not four times faster. What the other three cards buy is a four times
-larger effective batch (4 x `batch_size` = 32 samples instead of 8), i.e.
-**3.01x the samples per second**, which is 75% of perfect scaling. The missing
-25% is the gradient all-reduce and four times as many epoch boundaries.
-
-So: **four GPUs let you train on four times as much data in the same wall clock,
-or reach the same number of samples in a third of the time. They do not make a
-fixed `max_steps` finish sooner -- they make it finish slightly later.** Halve
-`max_steps` when you move a recipe from one GPU to four if you want the same
-number of samples seen.
-
-**58 batches per epoch is the correct number for four ranks**, and it is worth
-knowing why, because 58 is also the symptom of the cluster trap in
-[docs/01](01_setup.md#three-cluster-traps-that-have-already-bitten-this-project).
-`tiny_train` holds 1825 samples; Lightning shards them across ranks
-(`ceil(1825 / 4) = 457` each) and each rank makes batches of 8, so
-`ceil(457 / 8) = 58`. On a genuine four-rank job that is right and the effective
-batch is 32. On a **one**-process job that SLURM handed four GPUs to, you see the
-same 58 -- and there the effective batch is still 8, so you are training on a
-quarter of the data. Same number, opposite meanings: check `SLURM_NTASKS`, not
-just the batch count.
-
-### And what sixteen GPUs buy, measured on `large`
-
-The table above is `tiny` on one node. The preset that actually needs the
-hardware is `large`, and it has been measured directly rather than extrapolated
--- `dataloader=glorys`, metrics on, 60 and 260 steps so the slope cancels
-start-up, jobs 1285596 (one node) and 1285595 (four):
-
-| | batches per epoch | s per optimiser step | samples/s | start-up |
-|---|---|---|---|---|
-| 1 GPU (`jupiter_1gpu`) | 9488 | 0.5909 | 1.69 | not recorded |
-| 4 GPU, 1 node (`jupiter_4gpu`) | 2372 | 0.7041 | 5.68 | 38 s |
-| 16 GPU, 4 nodes (`jupiter_4nodes`) | **593** | 0.7694 | 20.80 | 41 s |
-
-**`large` scales far better than `tiny` did**, and the reason is the thing that
-makes it expensive: one step is 0.59 s of compute on a 459.6 M-parameter model,
-which is enough to hide most of a 1.8 GB gradient all-reduce behind it. Four
-GPUs cost 1.19x per step for 3.36x the throughput (84% of perfect); sixteen cost
-1.30x for 12.29x (77%). **Crossing the network -- four GPUs to sixteen -- costs
-9.3% per step and returns 3.66x the samples, which is 91.5% of perfect.** The
-1.33x measured on `tiny` was the pessimistic end of the range, not the rule.
-
-Two caveats on those figures. Each is one allocation, and **the second four-node
-allocation was slower, not faster**: job 1285787, on different nodes, spent
-158.29 s on 200 extra steps plus one epoch boundary, so at most 0.7914 s/step.
-Read 0.7694 as the optimistic end of a +-5% band rather than as four significant
-figures. And start-up depends on the page cache -- the first `large` invocation
-in a fresh allocation spent 73 s inside the epoch bar before its first optimiser
-step, against 4 s once the archive was warm.
-
-### Sixteen GPUs are worth it only if `max_steps` moves too
-
-`max_steps` counts optimiser steps and one step is one sample per GPU for
-`large`, so keeping it fixed means four times the data *and* more wall clock:
-
-| the 16-GPU plan | samples | epochs of the 9488-sample split | wall clock |
-|---|---|---|---|
-| keep `max_steps: 300000` | 4.8 M | 506 | 64.1 h |
-| hold samples seen constant, `max_steps: 75000` | 1.2 M | 126 | **16.0 h** |
-| *(for comparison: 4 GPUs, `max_steps: 300000`)* | 1.2 M | 126 | 58.7 h |
-
-[`scripts/pretrain_large.slurm`](../scripts/pretrain_large.slurm) ships the
-middle row, and does it by deriving `max_steps` from a **sample** budget and the
-size of the allocation rather than hardcoding a step count, so submitting it at
-`--nodes=1` still runs the original 300000 steps. Five hundred epochs of a
-9488-sample archive is not four times the model for four times the wait; the
-same data 3.66x sooner is what the extra nodes are for. `num_training_steps:
-${max_steps}` in the preset means the cosine schedule follows `max_steps`, so
-the shorter run is a complete schedule and not a truncated one.
-
-**The learning rate is deliberately left at `2e-4`.** The effective batch goes
-from 4 to 16, and the usual rules would put it at 4e-4 (square root) or 8e-4
-(linear); configs/module/large.yaml explains why it was not raised without a run
-to justify it, and gives the override.
-
-```bash
-make train MODULE=small NAME=my_small_run
-make train MODULE=base  NAME=my_base_run  CLUSTER=jupiter_4gpu
-```
-
-Reproduce the table yourself:
-
-```bash
-make benchmark
-```
-
-That runs a real forward, backward and optimiser step for every preset on the
-real data, and prints parameters, step time, peak memory and the projected wall
-clock. It takes a few minutes on a GPU.
-
-### Reading the table without being misled
-
-`s/step` and `peak GiB` are **not comparable across rows**, because each preset
-is benchmarked at the batch size that fits it. That is why the table above
-quotes **ms per sample**, which is comparable, and it is monotone in model size
-as it must be: 40.2 < 75.5 < 163.8 < 542.3.
-
-Peak memory is very nearly linear in `batch x emb_dim x depth_multiplier`. The
-batch sizes were chosen to sit near 45 GiB -- under half of the 96 GB card -- so
-that a long run survives fragmentation, the validation loop and DDP buffers.
-`large` additionally turns on gradient checkpointing, which is why it breaks the
-linear rule.
+That is worth having, but it is a different experiment, not a faster one. If you
+want the same run to finish sooner, shorten `max_steps` -- and move
+`num_training_steps` with it, or the cosine schedule anneals to a budget the run
+never reaches.
 
 ## 4.2 The vertical is not a scaling axis
 
@@ -296,7 +144,7 @@ The cheapest improvement available, and the first one to try.
 
 ```bash
 .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
-    cluster=jupiter_1gpu module=tiny dataloader=glorys_tiny \
+    cluster=jureca_1gpu module=tiny dataloader=glorys_tiny \
     ++name=tiny_long ++max_steps=16000 ++save_step_frequency=4000
 ```
 
@@ -402,7 +250,7 @@ step counter, fresh schedule:
 
 ```bash
 .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
-    cluster=jupiter_1gpu module=tiny dataloader=glorys \
+    cluster=jureca_1gpu module=tiny dataloader=glorys \
     ++name=ft_probe +load_ckpt=modelstore/task6_tiny \
     ++max_steps=2000 ++save_step_frequency=500 ++module.module.lr=1e-4
 ```
@@ -463,10 +311,6 @@ sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune_tiny scripts/finetune.slurm
 # train a `base` from scratch, one node, one 12-hour window -- how the shipped
 # model above was made
 sbatch scripts/pretrain_base.slurm
-
-# what the ORGANISERS ran on JUPITER, and what a 40 GiB card cannot: `large`
-# on 4 nodes x 4 GH200
-sbatch scripts/pretrain_large.slurm
 ```
 
 [`scripts/pretrain_base.slurm`](../scripts/pretrain_base.slurm) runs **84 000
@@ -477,16 +321,6 @@ projected 14.2 h, which does not fit a window. `num_training_steps` follows
 `max_steps`, so the shorter budget is a complete annealed run rather than one that
 was cut off. Remember that `max_steps` counts optimiser steps and four ranks do
 not divide it -- what they buy is 4 samples per step instead of 1.
-
-**A pre-trained `large` used to ship here, and has been withdrawn.** It was
-measured at 50.81 GiB at batch 1 with `gradient_checkpointing: True` already on,
-and a dc-gpu A100 has 39.5 GiB, so it OOMs on its first optimiser step whether you
-are training or fine-tuning. Four GPUs do not fix it -- **measured**: Lightning
-runs DDP, which replicates the whole model on every rank, and all four ranks died
-at 39.4 GiB. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` does not fix it
-either, also measured; the ~900 MiB of fragmentation it recovers is not the 11 GiB
-the model is over by. Sharding (FSDP/ZeRO-3) would recover only a few GiB, because
-what does not fit is the activations and those are per-rank whatever you shard.
 
 [`scripts/finetune.slurm`](../scripts/finetune.slurm) is (b) above with the
 mistakes made impossible. Every knob is an environment variable with a default
@@ -517,139 +351,34 @@ pre-trained checkpoints under modelstore/task6_tiny are untouched -- OK
 dataloader, logs `train_loss=2.35e+3` after twenty steps. Three orders of
 magnitude is not a tuning difference; the weights landed.
 
-[`scripts/pretrain_large.slurm`](../scripts/pretrain_large.slurm) is the other
-end: `--nodes=4 --ntasks-per-node=4 --gres=gpu:4 --cpus-per-task=72`,
-`cluster=jupiter_4nodes`, sixteen GH200 in one DDP job. Three things about it are
-worth knowing even if you never run it.
+[`scripts/pretrain_base.slurm`](../scripts/pretrain_base.slurm) is the other end:
+one node, `--ntasks=1`, four visible GPUs, `cluster=jureca_4gpu`. Two things about
+it are worth knowing even if you never run it.
 
-**It does not launch `geoarches.main_hydra`, and it cannot.** geoarches builds
-its trainer as `L.Trainer(devices="auto", accelerator="auto", strategy=...)` with
-no `num_nodes`; Lightning defaults that to 1, and on more than one node every
-rank stops before the first batch:
+**One task, four GPUs -- not one task per GPU.** Lightning picks its launch mode
+from the environment. With `--ntasks=1` it forks one process per visible device
+itself, which is what the trainer is configured for; under `--ntasks-per-node=4`
+it would attach to SLURM's ranks instead, and the two disagree about who spawns
+whom.
 
-```
-ValueError: You set `num_nodes=1` in Lightning, but the number of nodes
-configured in SLURM `--nodes=4` does not match. HINT: Set `num_nodes=4`.
-```
-
-[`oceanarches/main_multinode.py`](../oceanarches/main_multinode.py) is the
-answer, and it is about fifty lines of code: it composes the same hydra config,
-hands `L.Trainer` the `num_nodes` from `cluster.num_nodes` (or, when the cluster
-config does not say, from the allocation), and then calls geoarches' own `main`
-with the composed config. Nothing is forked and nothing is copied -- geoarches is
-installed non-editable from a pinned commit and this project has never vendored
-any of it -- so resume, the checkpoint-every-N-steps callback and the
-`modelstore/<name>/config.yaml` dump are all still geoarches' code. At one node
-it changes nothing. Use it wherever you would have used `geoarches.main_hydra`
-on more than one node:
+**It runs 84 000 steps, not the preset's 110 000.** At the measured 2.52 it/s
+that is 9 h 23 m, which fits a single wall-clock window; 110 000 would not.
+`num_training_steps` follows `max_steps`, so the shorter budget is a complete,
+properly annealed run rather than one that was cut off -- and `SAVE_EVERY` divides
+`MAX_STEPS`, so the finished model actually reaches disk. Both knobs are
+environment variables:
 
 ```bash
-srun --nodes=4 --ntasks-per-node=4 --gres=gpu:4 --cpus-per-task=72 \
-    .venv/bin/python -m oceanarches.main_multinode --config-path $PWD/configs \
-    cluster=jupiter_4nodes module=large dataloader=glorys ++name=my_run
+sbatch --export=ALL,NAME=base_v2,MAX_STEPS=72000 scripts/pretrain_base.slurm
 ```
 
-Submitting `cluster=jupiter_4nodes` into an allocation of some other size is
-refused before any GPU work, on every rank:
-
-```
-FATAL: cluster=jupiter_4nodes is a 4-node configuration (cluster.num_nodes: 4),
-but this allocation has 2 node(s). Either submit with --nodes=4, or pick the
-cluster config that matches the allocation ...
-```
-
-**The job is much shorter than the run.** On JUPITER, where this was run, the
-booster QOS capped a single job at twelve hours -- **check the equivalent for
-`dc-gpu` on JURECA before planning launches**, because none of the numbers in
-this section were re-measured after the move:
-
-```
-$ sacctmgr show qos part_booster format=Name,MaxWall
-part_booster    12:00:00
-```
-
-against a **~16.5 h** projection for the shipped four-node plan -- 75000 steps at
-the measured `0.7694 s/step` is 16.0 h, and the 126 epoch boundaries add ~17
-minutes (one is ~8 s, measured directly as the validation loop's 46 batches) --
-so the run is two of
-these jobs back to back rather than the five or six the one-node plan needed.
-(The one-node numbers, for comparison: 300000 steps at `0.7041 s/step` is 58.7 h,
-and a single GPU would be ~50 h for a quarter of the data.) The script handles
-the split two ways:
-you `sbatch` it again with the same `NAME`, and `--signal=B:USR1@600` fires a
-trap ten minutes before the wall clock ends that prints exactly that command
-(and tries `scontrol requeue` first, for sites that allow it). Either way it is
-the same path -- `resume: True` in `configs/config.yaml`, and geoarches
-reloading the newest checkpoint in `exp_dir` with the optimiser state and the
-global step intact -- so at most `SAVE_EVERY` steps are lost.
-
-**JUPITER does not allow requeueing at all**, which is why the manual relaunch
-is the primary mechanism and why `#SBATCH --requeue` is deliberately absent.
-With it the job does not even submit:
-
-```
-$ sbatch --requeue ... scripts/pretrain_large.slurm
-sbatch: error: job_submit_filter: --requeue option is not supported
-sbatch: error: Batch job submission failed: Requested operation not supported on this system
-```
-
-**The step budget must not change across a relaunch**, and the reason is sharper
-than "the finish line moves". geoarches' resume does not re-compose `cfg.module`:
-it replaces it with the *resolved* module config written at the first launch and
-then re-applies only the `+`-prefixed command-line overrides. So `++max_steps=8`
-moves the trainer's budget while `module.module.num_training_steps` stays at the
-first launch's 4 -- reproduced exactly that way:
-
-```
-updated cfg ... 'max_steps': 8 ... 'num_training_steps': 4
-```
-
-and diffusers' cosine lambda, `max(0, 0.5 * (1 + cos(pi * 2 * num_cycles *
-progress)))`, does not clamp past the end of its schedule. At twice the stale
-budget the cosine is back at `cos(2 pi) = 1`, i.e. **the learning rate climbs
-back to its peak** on a run that was supposed to be annealing to zero. The script
-now passes `++module.module.num_training_steps=${MAX_STEPS}`, which starts with
-`+` and therefore survives that merge, so the schedule follows the budget. That
-fixes the mechanism; it does not make a changed budget a good idea. This is
-reachable through the script's own knobs -- the budget is derived from the world
-size, so a relaunch at a different `--nodes` changes it -- so relaunch at the
-same node count, and choose `SAMPLE_BUDGET` before the first launch or start a
-fresh `NAME`.
-
-Measured on the script itself: job 1286618 ran 100 steps at `--nodes=2`
-(800 samples / 8 ranks), and job 1286623 relaunched the same `NAME` at
-`--nodes=1`, derived 200 steps (800 / 4), restored from
-`checkpoint_global_step=100.ckpt` and finished at 200. geoarches' pre-merge
-`hydra config` line still held `'num_training_steps': 100`; its post-merge
-`updated cfg` line held 200, on all four ranks.
-
-Both halves were verified on four nodes with the real script and the real preset
-(`MODULE=large MAX_STEPS=800 SAVE_EVERY=400`). Job 1285799 brought up all sixteen
-ranks (`GLOBAL_RANK: 0..15, MEMBER: 1/16..16/16`), reported 593 batches per epoch
--- `ceil(9488 / 16)`, which is what sixteen ranks should shard the train split
-into -- and wrote `checkpoint_global_step=400.ckpt` (5.5 GB) before it was
-cancelled at step 400. Job 1285909, submitted with the same `NAME`, printed
-
-```
-Found checkpoints [.../checkpoint_global_step=400.ckpt]
-Restored all states from the checkpoint at .../checkpoint_global_step=400.ckpt
-```
-
-and carried on from 400 through the epoch boundary at 593 to 800, `COMPLETED` in
-7 min 47 s. The same was proved at four GPUs in task 10.
-
-(You will see `SLURM auto-requeueing enabled` in the log. That is Lightning's own
-handler, and it is *not* what requeues this job: the `B:` in `--signal=B:USR1@600`
-sends the signal to the batch shell only, never to the training tasks. Left to
-Lightning it would write `.pl_auto_save.ckpt` into the repository root, which
-geoarches does not look at -- it only reads `modelstore/<name>/checkpoints/`.)
-
-**More GPUs do not make a fixed `max_steps` finish sooner.** `max_steps` counts
-*optimiser* steps, and one optimiser step is still one forward and backward plus
-an all-reduce whatever the world size. What the extra cards buy is a larger
-effective batch -- more data per step -- which is why this script derives
-`max_steps` from a sample budget instead of hardcoding it. See
-[4.1](#41-the-four-presets).
+If a job is killed at the wall clock, `sbatch` it again with the same `NAME`:
+`resume: True` in `configs/config.yaml` makes geoarches reload the newest
+checkpoint in `exp_dir` with the optimiser state and the global step intact, so at
+most `SAVE_EVERY` steps are lost. Move `MAX_STEPS` between launches and the
+learning-rate schedule follows it, because the script passes
+`++module.module.num_training_steps` explicitly -- without that the cosine would
+keep annealing toward the first launch's budget.
 
 ### Which checkpoints exist for you to start from
 
@@ -687,7 +416,7 @@ Everything above is a hydra override, so nothing needs editing:
 
 ```bash
 .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
-    cluster=jupiter_1gpu module=tiny dataloader=glorys_tiny ++name=experiment_7 \
+    cluster=jureca_1gpu module=tiny dataloader=glorys_tiny ++name=experiment_7 \
     ++module.module.lr=1e-3 ++module.train.rollout_iterations=2 ++max_steps=4000
 ```
 
@@ -730,7 +459,7 @@ training.
 make train-tiny NAME=multistep HYDRA_ARGS="++module.train.rollout_iterations=2"
 ```
 
-**What it costs.** Measured on one booster GH200, `tiny`, batch 8, 40 training
+**What it costs.** Measured on `tiny`, 40 training
 steps each:
 
 | `rollout_iterations` | s / training step | relative |

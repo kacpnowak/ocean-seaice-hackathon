@@ -64,7 +64,7 @@ srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
 
 export CUDA_VISIBLE_DEVICES=0
 cd /p/scratch/training2635/4_ocean_ai/$USER/hackathon-ocean-sea-ice
-hostname                       # <- write this down, e.g. jpbo-053-01.jupiter.internal
+hostname                       # <- write this down, e.g. jrc0053
 .venv/bin/jupyter lab --no-browser --ip=0.0.0.0 --port=8888
 ```
 
@@ -74,17 +74,17 @@ It prints the address and the token you will need:
 [I ServerApp] Jupyter Server 2.20.0 is running at:
 [I ServerApp] http://0.0.0.0:8888/lab?token=90a102aa1359a502f16563c1bc0b3a18a...
     Or copy and paste one of these URLs:
-        http://jpbo-053-01.jupiter.internal:8888/lab?token=90a102aa1359a502f16563c1bc0b3a18a...
+        http://jrc0053:8888/lab?token=90a102aa1359a502f16563c1bc0b3a18a...
 ```
 
 Leave it running. If port 8888 is taken -- you are sharing this machine -- pick
 another one and use it in both places, for instance `--port=8899`.
 
 **2. Open a tunnel, in a second terminal on your laptop.** Use the same host you
-normally SSH into JUPITER with, and the compute node name from step 1:
+normally SSH into the cluster with, and the compute node name from step 1:
 
 ```bash
-ssh -N -L 8888:jpbo-053-01.jupiter.internal:8888 <your-user>@<the JURECA login host>
+ssh -N -L 8888:jrc0053:8888 <your-user>@<the JURECA login host>
 ```
 
 `-N` means "do not run a command, just forward the port". It looks like it has

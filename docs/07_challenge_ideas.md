@@ -52,7 +52,7 @@ directly.
 # variable assignment, so nothing reads it -- make now refuses such a command
 # line. Either quote it into HYDRA_ARGS, or use the python entry point directly
 # as below.
-G=".venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs cluster=jupiter_1gpu"
+G=".venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs cluster=jureca_1gpu"
 
 # the joint model: one network, all 11 variables
 $G module=tiny dataloader=glorys ++name=joint_run ++max_steps=4000
@@ -256,7 +256,7 @@ That is a null result at a tiny budget with one run per arm, not evidence that
 forcing cannot help, and it is exactly the sort of thing worth pushing on.
 
 **Re-run on JURECA, and the null result holds -- but it is not uniform, which is
-the useful part.** Same commands, `batch_size` 4 rather than the GH200 run's 8
+the useful part.** Same commands, at the preset's `batch_size`
 (so these 1000 steps saw half the samples that one did; the two arms are
 comparable to each other and not to the numbers above):
 
@@ -640,7 +640,7 @@ compute only:
 **So on JURECA, "keep the patch and pay for it" is not a cost decision -- it is
 not available.** Not at batch 1, and not with `gradient_checkpointing: True`
 either. An earlier version of this page projected "batch 1, gradient
-checkpointing, probably four GPUs" from the 96 GB GH200 the kit was built on; on
+checkpointing, probably four GPUs"; on
 a 40 GiB card batch 1 does not fit, and **four GPUs do not fix it**, because
 Lightning's DDP replicates the whole model on every rank rather than sharding it.
 Sharding the parameters, gradients and optimiser state (FSDP, ZeRO-3) would buy

@@ -30,7 +30,7 @@ yours, so the run would start, and every training command now warns loudly when
 
 ```
 .venv/bin/python -m geoarches.main_hydra --config-path /path/to/repo/configs \
-	cluster=jupiter_1gpu module=tiny dataloader=glorys_tiny ++name=my_first_run
+	cluster=jureca_1gpu module=tiny dataloader=glorys_tiny ++name=my_first_run
 ```
 
 Check it yourself with `make -n train-tiny`, which prints the recipe without
@@ -57,12 +57,12 @@ Every route into training -- `make train-tiny`, `make train`, the raw
 ```
 ==============================================================================
 [oceanarches] run plan -- notebook_probe   (mode=train)
-  config       module=tiny  dataloader=glorys_tiny  cluster=jupiter_1gpu  forcing=none
-  budget       max_steps 200 (command line), batch_size 8 (cluster=jupiter_1gpu)
+  config       module=tiny  dataloader=glorys_tiny  cluster=jureca_1gpu  forcing=none
+  budget       max_steps 200 (command line), batch_size 8 (cluster=jureca_1gpu)
   checkpoints  every 100 steps -> 100, 200
                in modelstore/notebook_probe/checkpoints
   start        FRESH START -- modelstore/notebook_probe holds no checkpoint
-  allocation   SLURM job 1291887, 1 node(s), on jpbo-001-16.jupiter.internal
+  allocation   SLURM job 123456, 1 node(s), on jrc0001
 ==============================================================================
 ```
 
@@ -155,7 +155,7 @@ of the dataset, and the loss curve looks completely normal.
 [Fix: `export CUDA_VISIBLE_DEVICES=0`.](01_setup.md#three-cluster-traps-that-have-already-bitten-this-project)
 
 (58 is *also* the right number for a deliberate four-rank DDP job with
-`cluster=jupiter_4gpu`, where the effective batch really is 32 and nothing is
+`cluster=jureca_4gpu`, where the effective batch really is 32 and nothing is
 lost -- `ceil(ceil(1825 / 4) / 8) = 58`. Same number, opposite meanings. The
 thing that tells them apart is `SLURM_NTASKS`: 1 means you have the trap, 4 means
 you have DDP. See
@@ -177,7 +177,7 @@ value that does divide -- it used to train for real and leave nothing behind.
 
 ## 3.3 The measured wall clock
 
-Timed with a stopwatch on one JUPITER booster GH200, `bf16-mixed`, batch 8, 16
+Timed on one dc-gpu A100, `bf16-mixed`, at the preset's batch size and 8
 dataloader workers, `CUDA_VISIBLE_DEVICES=0`:
 
 ```
@@ -386,7 +386,7 @@ Quote the tolerance on the **RMSEs**, not on the margins. Measured across three
 independently trained `tiny` checkpoints, day-1 SST RMSE came out at 0.1249,
 0.1273 and 0.1290 degC -- a spread of about 3% -- while the *margin* over
 persistence moved from -4.6% to -2.8%, which is a 60% change in a number that
-looks like the headline. A cold-start rehearsal from a fresh clone got -9.4% on
+looks like the headline. A second run from a fresh clone got -9.4% on
 `zos` against the -15.1% recorded above.
 
 So: an RMSE more than about 5% away from these, or a margin with the **wrong

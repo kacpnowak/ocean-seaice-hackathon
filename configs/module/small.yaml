@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
-# small -- about three and a half hours on one GH200.  Twice the token width of
-# `tiny`, same number of attention blocks, same 13 depth levels.
+# small -- twice the token width of `tiny`, same number of attention blocks,
+# same 13 depth levels.  Several hours on one dc-gpu A100.
 #
 #     python -m geoarches.main_hydra --config-path $PWD/configs \
-#         cluster=jupiter_1gpu module=small dataloader=glorys ++name=my_small_run
+#         cluster=jureca_1gpu module=small dataloader=glorys ++name=my_small_run
 #
 # configs/module/tiny.yaml carries the commentary; only the numbers differ here.
 # ---------------------------------------------------------------------------
@@ -14,27 +14,14 @@ project: ocean-sea-ice
 depth_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13]
 n_depths: 13
 
-# Per-GPU batch size. The cluster configs read it through ${module.batch_size}.
-# Measured on one GH200 (96 GB): 42.24 GiB peak, 0.302 s/step, 13.2 samples/s,
-# by the same benchmark run quoted in configs/module/tiny.yaml. From the batch
-# sweep: batch 8 reaches 83.8 GiB -- too close to the edge for a four-hour run.
-batch_size: 4
+# Per-GPU batch size, read by the cluster configs through ${module.batch_size}.
+# A dc-gpu card is an A100-SXM4-40GB (39.5 GiB usable): measured with `make benchmark` on a dc-gpu A100.
+# Override for a one-off with HYDRA_ARGS="++batch_size=N".
+batch_size: 2
 
-# Per-GPU batch size on a 40 GiB card (JURECA dc-gpu is an A100-SXM4-40GB, 39.5
-# GiB usable).  `batch_size` above is a GH200 measurement and does NOT fit here;
-# configs/cluster/jureca_*.yaml read THIS key instead, so the number above stays
-# true for the machine it was measured on and scripts/pretrain_large.slurm keeps
-# working.  Measured with `make benchmark` on a dc-gpu A100: 21.43 GiB peak, 0.307 s/step.
-# From the batch sweep: batch 4 does not fit.
-batch_size_40gib: 2
-
-# Wall clock, and mind which number this is.
-#   * compute only, `make benchmark`:            0.302 s/step
-#   * a REAL training step, measured on
-#     dataloader=glorys at 60 vs 260 steps:      0.3105 s/step
-# 0.3105 x 40000 = 3.45 h, plus ~17 epoch boundaries at ~38 s = about 3.6 h on
-# ONE GH200.  A projection from a measured rate, not a measured run.  Four GPUs
-# would NOT make it faster -- see the note in configs/module/base.yaml.
+# Wall clock: `make benchmark` prints the step time this preset gets on the card
+# you are actually on, which is the only number worth planning against.  Nobody
+# has trained this preset to completion.
 max_steps: 40000
 save_step_frequency: 10000
 limit_val_batches: 64

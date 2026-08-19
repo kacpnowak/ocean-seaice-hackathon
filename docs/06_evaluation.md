@@ -36,7 +36,7 @@ evalstore/task6_tiny/
   summary.json
 ```
 
-**Opening it.** There is no browser on JUPITER, so `report.html` has to come to
+**Opening it.** There is no browser on the cluster, so `report.html` has to come to
 you or be served to you. Either:
 
 ```bash
@@ -57,7 +57,7 @@ of that one file is enough, and it still works on a laptop with no repository on
 it.
 
 **One honest caveat about `report.html`.** It has never been opened in a
-browser. There is no browser engine on JUPITER and the environment is pinned,
+browser. There is no browser engine on the cluster and the environment is pinned,
 so nobody in this project has actually looked at the rendered page -- only at
 the figures it embeds, which are the same PNGs `report.md` links. What *is*
 checked, mechanically and on every test run

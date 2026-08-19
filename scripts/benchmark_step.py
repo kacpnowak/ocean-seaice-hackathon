@@ -8,7 +8,7 @@ memory and the wall clock that implies.  It also runs the shape checks that the
 whole pipeline depends on -- in particular the surface-only component, which is
 the configuration most likely to break.
 
-    # everything, on one GH200
+    # everything
     srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --time=00:30:00 --pty \
         .venv/bin/python scripts/benchmark_step.py
 

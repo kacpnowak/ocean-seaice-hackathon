@@ -1338,7 +1338,7 @@ def test_report_html_is_well_formed_and_every_asset_decodes(synthetic_result, tm
     """The nearest thing to opening it, without a browser.
 
     `report.html` has never been rendered by a browser engine -- there is none on
-    JUPITER and the environment is pinned, so this is a real limitation and is
+    this cluster and the environment is pinned, so this is a real limitation and is
     stated as one in docs/06.  What CAN be checked mechanically is checked here:
     that every tag is closed in the right order, that every embedded asset
     decodes and that its bytes are the type it claims, and that nothing at all
@@ -2319,7 +2319,7 @@ def test_the_evaluation_guard_is_the_training_guard_and_not_a_second_one():
     from oceanarches.evaluation.run_eval import allocation_complaint
 
     evaluation = allocation_complaint("cuda", env={}, hostname="host")
-    training = guards.allocation_warning(env={}, hostname="host", cluster_name="jupiter_1gpu")
+    training = guards.allocation_warning(env={}, hostname="host", cluster_name="jureca_1gpu")
 
     assert evaluation is not None and training is not None
     assert evaluation != training

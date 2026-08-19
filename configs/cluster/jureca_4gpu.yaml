@@ -9,10 +9,6 @@
 # *per process*: the effective batch is 4 x batch_size and the node runs
 # 4 x cpus dataloader workers.
 #
-# The batch sizes are JUPITER GH200 measurements and have NOT been re-measured
-# on JURECA -- run `make benchmark` before a long run. See the long note at the
-# top of configs/cluster/jureca_1gpu.yaml.
-#
 # Offline wandb on purpose; see configs/cluster/jureca_1gpu.yaml. The root config
 # ships `log: True` so that `modelstore/<name>/config.yaml` is written, and
 # offline wandb makes that cost nothing -- no account, no key, no network.
@@ -20,12 +16,10 @@ wandb_mode: offline
 use_custom_requeue: False
 
 precision: bf16-mixed
-# Per-GPU batch.  NOT ${module.batch_size}, for exactly the reason
-# configs/cluster/jureca_1gpu.yaml explains at length: dc-gpu is a 40 GB A100
-# and the presets are sized for 96 GB GH200s, so `tiny`'s shipped 8 OOMs.  DDP
-# replicates the model per rank, so the per-rank memory is the same as on one
-# GPU and the same number applies; the EFFECTIVE batch becomes 4 x this.
-batch_size: ${module.batch_size_40gib} # per GPU
+# Per-GPU batch, from the size preset. DDP replicates the model on every rank,
+# so per-rank memory is the same as on one GPU and the same number applies; the
+# EFFECTIVE batch becomes 4 x this.
+batch_size: ${module.batch_size} # per GPU
 cpus: 8
 
 # Used by `python -m geoarches.submit` if you prefer submitit over srun.

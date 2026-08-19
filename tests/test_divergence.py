@@ -1,6 +1,6 @@
 """The divergence guard: what stops a blown-up run instead of paying for it.
 
-The run this exists for: `large`, 459 M parameters, 16 GH200, lr=2e-4. It
+The run this exists for: a large model on 16 GPUs at lr=2e-4. It
 diverged between step 15000 and 20000 and then trained for **eight more hours**
 producing garbage. Nothing stopped it and nothing said anything. Measured from
 its own checkpoints, with a forward pass on real validation data::

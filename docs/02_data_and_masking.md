@@ -37,10 +37,9 @@ What we ship:
 | size | 92 GB in 33 yearly files, prepared from a 608 GB raw archive |
 | days | 12051 -- two are missing, see [2.11](#211-the-archive-has-a-hole-in-february-2003) |
 
-The raw archive lives on JUPITER, at
-`/e/data1/climateai/hclimrep/data/glorys_1deg`. **It was not copied to JURECA**
--- 640 GB to reproduce the 92 GB of prepared files that came across ready to
-use -- so nothing you do here reads it. For the record, it is
+The raw archive is **not on this machine**: it is 640 GB, and the 92 GB of
+prepared files it produces are already here, so nothing you do reads it. For
+the record, it is
 read-only. `scripts/prepare_glorys.py` turns it into one file per year with only
 the depths we use, which is what everything else reads. That has already been
 done for you; `make doctor` confirms it.

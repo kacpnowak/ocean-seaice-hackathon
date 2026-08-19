@@ -198,8 +198,8 @@ class DivergenceGuard:
 
     Why this exists, measured
     -------------------------
-    The 16-GPU ``large`` pre-training run diverged between step 15000 and 20000
-    and then trained for **eight more hours** on 16 GH200s producing garbage.
+    A 16-GPU pre-training run diverged between step 15000 and 20000
+    and then trained for **eight more hours** on 16 GPUs producing garbage.
     Nothing stopped it and nothing said anything.  Read off its own checkpoints,
     with a forward pass on real validation data::
 
@@ -1005,7 +1005,7 @@ class OceanForecastModule(ForecastModuleWithCond):
         Called from :meth:`training_step`, deliberately, rather than from a
         Lightning callback: ``training_step`` is the one piece of code every
         route shares -- ``make train-tiny``, notebooks 02 and 03,
-        ``scripts/finetune.slurm``, ``scripts/pretrain_large.slurm``,
+        ``scripts/finetune.slurm``, ``scripts/pretrain_base.slurm``,
         ``geoarches.main_hydra`` and ``oceanarches.main_multinode`` -- while a
         callback has to be wired into each entry point separately and would
         cover only the ones somebody remembered.

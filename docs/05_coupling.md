@@ -362,7 +362,7 @@ be parsed by make as a variable assignment and dropped. Quote it into
 
 ```bash
 .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
-    cluster=jupiter_1gpu module=tiny dataloader=glorys_forced forcing=file \
+    cluster=jureca_1gpu module=tiny dataloader=glorys_forced forcing=file \
     ++name=my_forced ++max_steps=1000
 ```
 
@@ -387,7 +387,7 @@ notebook and not fine in a comparison.
 
 ### What a short forced run actually measured
 
-Two `tiny` models, trained back to back on one GH200, **identically
+Two `tiny` models, trained back to back on one GPU, **identically
 configured except for the forcing**: `dataloader=glorys_forced`, 1000 steps, batch 8,
 `seed=0`, 302 training samples (2024-01-03..2024-10-30), the same 29 validation
 samples (2024-11-01..2024-11-29). **Both splits are inside 2024, the holdout

@@ -5,7 +5,7 @@
 Read time: 10 minutes. Doing it: 5 minutes if the environment already exists,
 about 10 if you build it yourself.
 
-Everything here happens on **JUPITER**. If you have never used a compute cluster
+Everything here happens on **JURECA**. If you have never used a compute cluster
 before, [1.4](#14-slurm-in-five-minutes) is written for you and nothing in it is
 assumed knowledge.
 
@@ -107,12 +107,6 @@ to 10 days. You can score it *and* fine-tune it on a single dc-gpu A100 -- both
 are tested. [docs/04](04_scaling_finetuning.md#the-two-slurm-scripts) is the
 fine-tuning path.
 
-An earlier version of the kit shipped a pre-trained `large` instead. **It has been
-withdrawn**, because it cannot be trained or fine-tuned on a dc-gpu A100 at all:
-50.81 GiB at batch 1 with gradient checkpointing already on, against 39.5 GiB,
-and four GPUs do not change that (DDP replicates the model per rank). `base` is
-the largest preset that fits this card.
-
 `base_pretrained` is 14 GB of checkpoints and the other four are under 1 GB each.
 **Linking costs you none of it** -- a symlink is a symlink, the bytes stay in the
 shared store, `load_module` reads only the newest checkpoint, and you only ever
@@ -181,19 +175,18 @@ because nothing in the resulting error message mentions inodes.
 directly, or `make` targets, which already do. You do not need to `activate`
 anything.
 
-Four things had to be pinned or overridden to make this work on JUPITER's
-Grace-Hopper (aarch64) nodes. They are all in
+Four things had to be pinned or overridden for this environment. They are all in
 [`overrides.txt`](../overrides.txt), with the reason next to each, and they are
 recorded here so they do not surprise you:
 
-* `torch` comes from `download.pytorch.org/whl/cu126`, not PyPI -- the plain PyPI
-  aarch64 wheel is **CPU-only** and would silently give you no GPU;
-* geoarches pins `tensordict <0.7`, but tensordict only ships aarch64 wheels from
-  0.8.0, so the pin is relaxed to `>=0.9`;
+* `torch` comes from `download.pytorch.org/whl/cu126`, not PyPI, so the CUDA
+  version is explicit rather than whatever PyPI serves for this platform;
+* geoarches pins `tensordict <0.7`, which has no wheel for this platform, so the
+  pin is relaxed to `>=0.9`;
 * geoarches pins `torchvision <0.21`, which would drag torch back to 2.5.
   geoarches never imports torchvision anywhere, so that pin is overridden too;
-* torch 2.9.1 asks for `nvidia-nccl-cu12==2.27.5`; JUPITER needs a newer NCCL, so
-  it is moved up.
+* torch 2.9.1 asks for `nvidia-nccl-cu12==2.27.5`; a newer NCCL is needed, so it
+  is moved up.
 
 ## 1.3 Check that it works
 
@@ -202,13 +195,9 @@ make doctor
 ```
 
 This is the command to run first, and again whenever something breaks. Real
-output from a working checkout -- **captured on JUPITER, where this kit was
-built**, so four lines read differently on JURECA and none of them is a problem:
-the GPU is a different card, `ffmpeg` is the x86_64 build rather than aarch64,
-the two `/e/...` paths are now under `/p/scratch/training2635`, and **`raw
-GLORYS` is a WARN rather than a PASS** because the 640 GB raw archive was
-deliberately not copied -- only `make prep-data` reads it, and the prepared data
-it produces came across ready to use.
+output from a working checkout. The exact card, versions and paths depend on the
+node you land on; what matters is the shape -- PASS for everything the kit needs,
+and WARNs only for things that do not stop you working.
 
 ```
 OceanArches doctor -- repo at /p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice
@@ -216,11 +205,11 @@ OceanArches doctor -- repo at /p/scratch/training2635/4_ocean_ai/nowak2/hackatho
   PASS  python           3.12.13 (/p/scratch/.../.venv/bin/python)
   PASS  imports          all core packages import
   PASS  power spectrum   pyshtools available
-  WARN  allocation       none -- SLURM_JOB_ID is unset, on jpbl-s02-02 (a login node)
+  WARN  allocation       none -- SLURM_JOB_ID is unset, on jrlogin01 (a login node)
                          -> anything that trains or evaluates needs a node of your own: srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 --cpus-per-task=12 --time=01:00:00 --pty bash
-  WARN  gpu              1x NVIDIA GH200 480GB (torch 2.9.1+cu126), 94 of 95 GiB free on device 0 -- visible, but NOT allocated to you
+  WARN  gpu              1x NVIDIA A100-SXM4-40GB (torch 2.9.1+cu126), 39 of 39 GiB free on device 0 -- visible, but NOT allocated to you
                          -> a visible card is not an idle one; see the `allocation` line above
-  PASS  ffmpeg           ffmpeg-linux-aarch64-v7.0.2
+  PASS  ffmpeg           ffmpeg-linux-x86_64-v7.0.2
   WARN  raw GLORYS       .../glorys_1deg_raw_NOT_COPIED does not exist -- not needed, the prepared data below is here
   PASS  prepared data    /p/scratch/.../data/glorys_1deg_prepped  33 yearly files (1993-2025)
   PASS  masks            glorys_1deg_masks.nc (2.9 MB)
@@ -237,7 +226,7 @@ That is the **login node**, and those two warnings are the point of the check.
 It takes about 6 seconds (5.7 s measured). Every row that is not `PASS` prints
 the command that fixes it on the line below.
 
-**A visible GPU is not an allocated one.** The JUPITER login nodes carry a real
+**A visible GPU is not an allocated one.** The login nodes carry a real
 card, so `torch.cuda.is_available()` is `True` there and tells you nothing about
 whether that card's memory, cores or process slots are yours -- a participant
 measured the login GPU at 99% utilisation with 49 GiB in use by somebody else's
@@ -261,7 +250,7 @@ of data is not enough even though the files are there.
 
 ## 1.4 SLURM in five minutes
 
-JUPITER is a shared machine. You log in to a **login node**, which is for
+This is a shared machine. You log in to a **login node**, which is for
 editing files, running `make doctor` and reading logs. You must **not** train
 there. Real work goes to a **compute node**, and you ask for one through SLURM.
 
@@ -269,12 +258,10 @@ A `dc-gpu` node has **4 GPUs**, and you normally want one quarter of it: one
 card and `--cpus-per-task=12`, which is what the other challenges in this project
 ask for.
 
-**The exact card and its memory are not quoted here on purpose.** This kit was
-built on JUPITER, whose booster nodes carry 4x GH200 with 96 GB each, and every
-`batch_size` in `configs/module/*.yaml` was measured against that. Nobody has
-re-measured them on JURECA. Run `make benchmark` inside your allocation before
-committing to a long run -- it prints the card, its memory and the peak usage of
-every preset -- and see [docs/TUTORS.md section 0](TUTORS.md).
+A `dc-gpu` card is an **A100-SXM4-40GB**, 39.5 GiB usable, and every `batch_size`
+in `configs/module/*.yaml` is measured to fit it. `make benchmark` prints the
+card, its memory and the peak usage of every preset, which is worth doing before
+you commit to a long run.
 
 ### Interactive: run one command on a GPU and watch it
 
@@ -340,22 +327,16 @@ During this project that launched four concurrent copies of the test suite on
 one node -- and, on another occasion, four copies of a script that edited a
 source file, which half-mutated it. **Always pass `--ntasks=1`.**
 
-**2. `--gres=gpu:1` gives you all four GPUs anyway.**
+**2. Check how many GPUs you actually got.**
 
-JUPITER's booster partition allocates whole nodes. Ask for one GPU and sixteen cores
-and SLURM hands you the lot. Measured, on the exact `srun` line printed above:
+`--gres=gpu:1` on `dc-gpu` really does give you one card -- the partition is not
+allocated whole-node. But if an allocation ever hands you more than you asked
+for, PyTorch Lightning sees every visible device, decides to shard your data
+across all of them -- inside a **single** process, because you asked for one
+task -- and you silently train on a **fraction** of your dataset: on four cards,
+58 batches per epoch instead of 229. The loss curve looks completely normal.
 
-```
-$ sacct -j 1282871 --format=JobID,AllocTRES%80,ReqTRES%60
-JobID          AllocTRES                                                ReqTRES
-1282871        billing=288,cpu=288,gres/gpu:gh200=4,gres/gpu=4,node=1   billing=16,cpu=16,gres/gpu=1,...
-```
-
-`gres/gpu=4`. `nvidia-smi --list-gpus` lists four cards. PyTorch Lightning then
-sees four devices, decides to shard your data four ways -- inside a **single**
-process, because you asked for one task -- and you silently train on a
-**quarter** of your dataset: 58 batches per epoch instead of 229. The loss curve
-looks completely normal.
+`nvidia-smi --list-gpus` tells you what you actually have.
 
 > **Two words you need for that sentence**, if you have not trained a network
 > before. A **batch** is the group of samples the model looks at in one step
@@ -389,11 +370,10 @@ old ones freely; nothing reads them. `rm -rf outputs/` is always safe.
 
 | path | what it is | writable? |
 |---|---|---|
-| *(not on JURECA)* | the raw GLORYS archive, 608 GB, lives on JUPITER and was not copied | n/a |
 | `data/glorys_1deg_prepped/` | 33 prepared yearly files, 92 GB | yes, but do not |
 | `oceanarches/stats/` | masks, normalisation statistics, climatology | rebuilt by `make stats` |
 | `oceanarches/stats/ifs_1deg_forcing_stats.pt` | normalisation for `forcing=file` only | rebuilt by `make forcing-stats` |
-| `data/ifs_1deg/` | the optional IFS atmosphere, 833 MB, copied from JUPITER | no, read-only |
+| `data/ifs_1deg/` | the optional IFS atmosphere, 833 MB | no, read-only |
 | `modelstore/<name>/` | checkpoints and the config of a training run | yes |
 | `evalstore/<name>/` | figures, animations, reports, cached rollouts | yes |
 | `logs/`, `outputs/`, `wandblogs/`, `lightning_logs/` | job output and run metadata | yes |
@@ -419,7 +399,7 @@ make stats                          # masks + statistics + climatology, ~8 minut
 
 The full preparation took **7 minutes** as a SLURM job and produced 33 files,
 12051 days, 92 GB. `make stats` took **4 minutes 55 seconds** on the machine it
-was first timed on and **8 minutes** in a cold-start rehearsal; plan for eight.
+was first timed on and **8 minutes** on a cold cache; plan for eight.
 It peaked at 5.6 GB of memory.
 
 **A subset is a real choice, not a smaller version of the same thing.** Two years

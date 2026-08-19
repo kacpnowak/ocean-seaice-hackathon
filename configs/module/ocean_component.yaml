@@ -13,8 +13,8 @@
 #
 # What IS different from `tiny`: the step budget.  A coupled system is two models,
 # and two of these fit in the ~30-minute coffee-break budget that `tiny` spends on
-# one.  Measured basis: `make train-tiny` ran 4500 steps in 2033 s on one booster
-# GH200, i.e. 0.438 s/step plus ~62 s of start-up, so 2000 steps is about 15.7
+# one.  Measured basis: `tiny` runs at about 0.44 s/step end to end on one
+# dc-gpu A100, plus ~62 s of start-up, so 2000 steps is about 15.7
 # min. That is a projection from a measured run, not a measurement of this
 # config -- re-time it if you change the batch size or the GPU.
 # ---------------------------------------------------------------------------

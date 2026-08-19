@@ -31,8 +31,7 @@ srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
      --cpus-per-task=12 --time=01:00:00 --pty bash
 export CUDA_VISIBLE_DEVICES=0
 
-# 5. train                             (~34 min on a JURECA dc-gpu A100;
-#                                       30 min 51 s measured on a GH200)
+# 5. train                                                       (~34 min)
 make train-tiny NAME=my_first_run
 
 # 6. score it against persistence and climatology, with figures  (4-6 min)
@@ -51,7 +50,7 @@ command now WARN when `SLURM_JOB_ID` is unset, because a *visible* GPU is not an
 *allocated* one: the login nodes carry a real card, `torch.cuda.is_available()`
 is `True` on them, and it says nothing about who else is using it.
 
-Then read `evalstore/my_first_run/report.html`. There is no browser on JUPITER,
+Then read `evalstore/my_first_run/report.html`. There is no browser on the cluster,
 so either open it in the Jupyter server [docs/00](docs/00_start_here.md) sets up,
 or copy that one file to your laptop -- it is self-contained. From **your own
 machine**, not from the cluster:
@@ -63,16 +62,11 @@ scp <you>@<the JURECA login host>:/p/scratch/training2635/4_ocean_ai/<you>/hacka
 The host is whichever one you already `ssh` into; the path is absolute, and
 `ls $PWD/evalstore/<run>/report.html` on the cluster prints it for you to paste.
 
-Those are stopwatch measurements on one JUPITER booster GH200, not targets.
-`make train-tiny` took **1851 s = 31 minutes** for 4000 steps and a cold-start
-rehearsal from a fresh clone measured **1767 s = 29 min 27 s** for the same
-command. [The full walk-through is here.](docs/03_first_model.md)
-
-**On JURECA, expect about 34 minutes.** `dc-gpu` is a 40 GiB A100 rather than a
-96 GiB GH200, so `cluster=jureca_1gpu` trains `tiny` at `batch_size: 4` -- the
-preset's 8 wants 42.9 GiB and does not fit. Measured here: 21.44 GiB peak,
-1.98 it/s, so 4000 steps is roughly 34 minutes. You do not have to pass anything
-for that; the cluster config carries it.
+Those are measurements, not targets. `dc-gpu` is an A100-SXM4-40GB, and
+`cluster=jureca_1gpu` trains `tiny` at `batch_size: 4`: 21.44 GiB peak,
+1.98 it/s, so 4000 steps is about **34 minutes**. You do not have to pass
+anything for that; the cluster config carries it.
+[The full walk-through is here.](docs/03_first_model.md)
 
 If you have no GPU yet, start with
 [`notebooks/01_explore_glorys.ipynb`](notebooks/01_explore_glorys.ipynb) --
@@ -92,7 +86,6 @@ and 2 above have been run.
 | [docs/06_evaluation.md](docs/06_evaluation.md) | how to tell whether a model is good |
 | [docs/07_challenge_ideas.md](docs/07_challenge_ideas.md) | nine experiments you can finish in a day |
 | [docs/cheatsheet.md](docs/cheatsheet.md) | every command, every override, every error |
-| [docs/TUTORS.md](docs/TUTORS.md) | *tutors only:* the shared store, the pre-trained model, publishing |
 
 And four notebooks:
 
@@ -114,7 +107,7 @@ temperature, salinity and velocity at 13 depths from 0.49 m to 1684 m.
 | data | GLORYS12V1 daily means, 1993-2025, 12051 days, 92 GB prepared from a 608 GB archive |
 | splits | train 1993-2018 (9488) / val 2019-2020 (730) / test 2021-2023 (1094) / holdout 2024-2025 (730) |
 | grid | 1 degree, 45115 ocean cells at the surface; **30.4% of the grid is land, and 42.5% at 1684 m** |
-| presets | `tiny` 13.2M params, `small` 45.0M, `base` 84.6M, `large` 459.6M |
+| presets | `tiny` 13.2M params, `small` 45.0M, `base` 84.6M |
 
 ## The one thing to understand before you start
 
@@ -203,13 +196,9 @@ number above improved; this one did not.
 
 `evalstore/base_pretrained/report.md` in the shared store has the full scorecard.
 
-**A pre-trained `large` used to ship here and has been withdrawn.** It needs
-50.81 GiB at batch 1 with gradient checkpointing already on, against a dc-gpu
-A100's 39.5 GiB, so on this machine it can be neither trained nor fine-tuned --
-and four GPUs do not help, because DDP replicates the model on every rank
-(measured: all four ranks died at 39.4 GiB). `base` is the largest preset that
-fits, and [`scripts/pretrain_base.slurm`](scripts/pretrain_base.slurm) is how the
-model above was made, in one 12-hour window, should you want to train your own.
+`base` is the largest preset that fits a dc-gpu A100, and
+[`scripts/pretrain_base.slurm`](scripts/pretrain_base.slurm) is how the model
+above was made, in one 12-hour window, should you want to train your own.
 
 ## The three open questions
 

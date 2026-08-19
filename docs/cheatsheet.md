@@ -21,7 +21,7 @@ make prep-data YEARS="2015 2016"    # prepare a couple of years
 make prep-data-slurm                # the whole archive as a batch job (~7 min)
 
 sbatch --export=ALL,FROM=task6_tiny,NAME=my_ft scripts/finetune.slurm   # 1 GPU
-sbatch scripts/pretrain_large.slurm  # organisers only: `large` on 4 nodes x 4 GH200, DDP
+sbatch scripts/pretrain_base.slurm  # organisers only: train `base` from scratch, one node
 make stats                          # masks + statistics + climatology (5-8 min)
 make stats-quick                    # same, fewer dates (~1 min, smoke tests only)
 #                                     recorded in both artefacts; doctor WARNs and
@@ -59,7 +59,7 @@ Overridable variables: `NAME`, `MODULE`, `DATALOADER`, `CLUSTER`, `YEARS`,
 
 ```bash
 .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
-    cluster=jupiter_1gpu module=tiny dataloader=glorys_tiny ++name=my_run
+    cluster=jureca_1gpu module=tiny dataloader=glorys_tiny ++name=my_run
 ```
 
 **It must be `--config-path` with an absolute path, never `--config-dir`.**
@@ -75,10 +75,10 @@ targets get it right; a test now runs the real recipe and checks.
 
 | override | effect |
 |---|---|
-| `module=tiny\|small\|base\|large` | the size preset |
+| `module=tiny\|small\|base` | the size preset |
 | `dataloader=glorys\|glorys_tiny\|glorys_ocean\|glorys_seaice\|glorys_seaice_isolated\|glorys_forced` | which variables, which years |
-| `cluster=local\|jupiter_1gpu\|jupiter_4gpu` | batch size, precision, workers |
-| `cluster=jupiter_4nodes` | the organisers' 16-GPU pre-training job. Needs `python -m oceanarches.main_multinode` instead of `geoarches.main_hydra`, which cannot do more than one node ([docs/04](04_scaling_finetuning.md#the-two-slurm-scripts)) |
+| `cluster=local\|jureca_1gpu\|jureca_4gpu` | batch size, precision, workers |
+| `cluster=jureca_4nodes` | the organisers' 16-GPU pre-training job. Needs `python -m oceanarches.main_multinode` instead of `geoarches.main_hydra`, which cannot do more than one node ([docs/04](04_scaling_finetuning.md#the-two-slurm-scripts)) |
 | `forcing=none\|file` | prescribed atmosphere. `file` needs `make forcing-stats` and `dataloader=glorys_forced`, and only covers 2024 -- which is holdout ([docs/05 5.6](05_coupling.md#56-external-forcing-the-three-routes-in-and-the-file-one)) |
 | `++name=my_run` | writes to `modelstore/my_run` |
 | `++max_steps=8000` | run length. `save_step_frequency` must **divide** it. |
@@ -134,7 +134,7 @@ Check what a command will actually do without running it:
 
 ```bash
 .venv/bin/python -m geoarches.main_hydra --config-path $PWD/configs \
-    cluster=jupiter_1gpu module=tiny dataloader=glorys_tiny --cfg job --resolve | head -40
+    cluster=jureca_1gpu module=tiny dataloader=glorys_tiny --cfg job --resolve | head -40
 ```
 
 ## SLURM one-liners
@@ -256,12 +256,12 @@ print(type(m).__name__, m.component.name, sum(p.numel() for p in m.parameters())
 | depths | 13 levels, 0.49 m to 1684 m |
 | splits | train 9488 / val 730 / test 1094 / holdout 730 samples |
 | the line to beat | 1-day persistence loss **0.82-0.87**, moves with the split |
-| `tiny` | 13.2 M parameters, 29-31 min on one GH200 / **~34 min on a JURECA A100**, 12.8% better than persistence |
+| `tiny` | 13.2 M parameters, **~34 min** on one dc-gpu A100, 12.8% better than persistence |
 | `base_pretrained` | **the shipped model.** 84.6 M parameters, 84 000 steps, 9 h 23 m on 4 x A100. Beats 1-day persistence on all 17 scored variables to day 10; loss 0.978 against `tiny`'s 2.114 on identical samples. Day-90 free run 2.4 degC SST with 0.07% of cells unphysical, against `tiny`'s 15-20 degC and 19-22%. Scores AND fine-tunes on one A100 at `batch_size 1`. Still worse than persistence on sea-ice EXTENT BIAS. |
-| JURECA batch sizes | dc-gpu is an **A100-SXM4-40GB** (39.5 GiB usable), not the 96 GB GH200 the presets were sized for. Measured with `make benchmark`: `tiny` **4** (21.44 GiB), `small` **2** (21.43), `base` **1** (21.33), `large` **does not fit at all** (needs 50.81 at batch 1 with checkpointing on). `cluster=jureca_*` reads these from each preset's `batch_size_40gib`, so you do not pass anything. |
+| batch sizes | dc-gpu is an **A100-SXM4-40GB** (39.5 GiB usable). Measured with `make benchmark`: `tiny` 4, `small` 2, `base` 1. The cluster config carries them; you do not pass anything. |
 | day-1 SST | model 0.125 degC, persistence 0.131 degC |
 | a full `make eval` | 232-246 s cold, ~5 s warm, ~4 s warm with `--skip-animations`; 10 figures, 6 animations, 2 reports, ~750 MB |
-| the test suite | **722 passed, 1 skipped, 3 min 40 s** measured on a JURECA login node (an older count of 604/82 s is what this table said before; the skip and the without-statistics behaviour are unchanged) |
+| the test suite | **722 passed, 1 skipped, 3 min 40 s** measured on a JURECA login node |
 | a fresh clone needs | `make setup` (**58 s measured cold on JURECA**, including the 2 GB torch download), `make stats` (~8 min), and its own `modelstore/` with the shipped runs symlinked in ([docs/01 1.1](01_setup.md#the-normal-route)) |
 | `$HOME` on JURECA | an **inode** quota of about 2050 files, of which a fresh account uses ~480. `df` shows terabytes free because the limit is on the file COUNT. `make setup` keeps uv's interpreter and wheel cache in `.uv/` under the repo for this reason, and `make doctor` measures the headroom. Anything else you install -- pip caches, `~/.cache/huggingface` -- must go on scratch too. |
 

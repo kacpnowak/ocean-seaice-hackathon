@@ -11,7 +11,7 @@ animation costs no GPU.
 
 Two implementation notes worth knowing before you edit this file:
 
-* **There is no system ffmpeg on JUPITER.**  ``imageio_ffmpeg.get_ffmpeg_exe()``
+* **There may be no system ffmpeg.**  ``imageio_ffmpeg.get_ffmpeg_exe()``
   unpacks a binary from the wheel and ``imageio`` picks it up automatically; that
   is the only reason mp4 works here.  If it ever does not, every writer falls
   back to an animated GIF rather than failing the evaluation.

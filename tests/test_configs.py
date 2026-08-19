@@ -44,14 +44,14 @@ from oceanarches.dataloaders.variables import (
 
 CONFIG_DIR = str(Path(__file__).resolve().parent.parent / "configs")
 
-MODULES = ["tiny", "small", "base", "large"]
+MODULES = ["tiny", "small", "base"]
 DATALOADERS = ["glorys", "glorys_tiny", "glorys_ocean", "glorys_seaice"]
 #: `glorys_forced` is `glorys_tiny` on a different window -- same component, same
 #: channel counts -- so it is composed and checked below rather than run through
 #: every combination test, which would cost four more model instantiations for
 #: shapes that are identical by construction.
 FORCINGS = ["none", "file"]
-CLUSTERS = ["local", "jupiter_1gpu", "jupiter_4gpu", "jupiter_4nodes"]
+CLUSTERS = ["local", "jureca_1gpu", "jureca_4gpu", "jureca_4nodes"]
 
 #: Keys geoarches' main_hydra.py reads off the root config.  If one of these
 #: disappears, training dies after the dataset has been opened, not before.
@@ -176,9 +176,7 @@ def test_every_cluster_composes(cluster):
     for key in REQUIRED_CLUSTER_KEYS:
         assert key in cfg.cluster, f"main_hydra reads cfg.cluster.{key}"
     assert cfg.batch_size == cfg.cluster.batch_size
-    # 72 was JUPITER's cores-per-GPU; JURECA's dc-gpu asks --cpus-per-task=12.
-    # The bound stays at the larger of the two so both machines' configs are legal,
-    # and it is a sanity check on the key, not a statement about either machine.
+    # A sanity check on the key, not a statement about the machine.
     assert 1 <= cfg.cluster.cpus <= 72, "dataloader workers per process, not per node"
 
 
@@ -689,7 +687,7 @@ def test_each_mixing_layer_carries_the_signal_on_its_own(disabled, cropped_masks
 # ---------------------------------------------------------------------------
 # One measurement of `make setup`, quoted the same everywhere
 # ---------------------------------------------------------------------------
-#: Measured on JUPITER, repository on /e/scratch, with uv's wheel cache already
+#: Measured with uv's wheel cache already
 #: populated: 20 s to build a brand-new `.venv`, 8 s to re-check an existing one;
 #: a participant timed 28 s.  The cold number is the ~2 GB PyTorch download.
 SETUP_TIMING = "~30 s warm, ~5 min cold"
@@ -707,7 +705,7 @@ SETUP_TIMING_FILES = (
 def test_every_document_quotes_the_same_setup_timing(relative):
     """Three documents quoted three different numbers for one command.
 
-    Measured by a participant in the second rehearsal: README said ~48 s, the
+    Measured: README said ~48 s, the
     Makefile's pre-setup error said about 5 minutes, and the run took 28 s. A
     reader cannot tell which of those to plan around, and the one they meet
     first -- the error message -- was the most wrong.
@@ -732,53 +730,31 @@ def test_the_fresh_checkout_error_quotes_that_timing_too(tmp_path):
     assert SETUP_TIMING in result.stdout + result.stderr
 
 
-#: What each preset was measured to fit on a JURECA dc-gpu A100 (39.5 GiB
-#: usable), by `make benchmark`.  `large` has no fitting batch at all; 1 is
-#: recorded so the config still composes, and README/docs/04 say it OOMs.
-JURECA_BATCH = {"tiny": 4, "small": 2, "base": 1, "large": 1}
+#: What each preset was measured to fit on a dc-gpu A100 (39.5 GiB usable), by
+#: `make benchmark`.
+JURECA_BATCH = {"tiny": 4, "small": 2, "base": 1}
 
 
 @pytest.mark.parametrize("module", sorted(JURECA_BATCH))
 @pytest.mark.parametrize("cluster", ["jureca_1gpu", "jureca_4gpu", "jureca_4nodes"])
-def test_the_jureca_clusters_use_the_batch_measured_on_a_40_gib_card(module, cluster):
-    """The presets are sized for 96 GB GH200s and dc-gpu is a 40 GiB A100, so
-    `batch_size: ${module.batch_size}` put `make train-tiny` -- step 5 of the
-    README quickstart -- into an out-of-memory error on its first step.
+def test_the_clusters_use_the_batch_measured_on_this_card(module, cluster):
+    """A batch that does not fit puts `make train-tiny` -- step 5 of the README
+    quickstart -- into an out-of-memory error on its first step.
 
-    Each preset now carries a second, measured number and the JURECA clusters read
-    THAT, so the GH200 value stays true for the machine it was measured on and
-    scripts/pretrain_large.slurm keeps working there.
-
-    MUTANT: reverting either cluster config to ${module.batch_size} fails this for
-    every preset; pinning one literal value fails it for all but one.
+    MUTANT: pinning one literal value in a cluster config fails this for all but
+    one preset.
     """
     cfg = build(module=module, dataloader="glorys", cluster=cluster)
     assert cfg.batch_size == JURECA_BATCH[module], (
         f"{cluster} composes batch_size {cfg.batch_size} for {module}, "
-        f"but {JURECA_BATCH[module]} is what fits a 40 GiB card"
+        f"but {JURECA_BATCH[module]} is what fits the card"
     )
 
 
 @pytest.mark.parametrize("module", sorted(JURECA_BATCH))
-def test_the_jupiter_clusters_still_use_the_gh200_batch(module):
-    """The other half of the same contract: the GH200 numbers must NOT have been
-    edited to make JURECA work, because pretrain_large.slurm still runs there.
-
-    MUTANT: changing a preset's `batch_size` instead of adding
-    `batch_size_40gib` fails this.
-    """
-    cfg = build(module=module, dataloader="glorys", cluster="jupiter_1gpu")
-    expected = {"tiny": 8, "small": 4, "base": 2, "large": 1}[module]
-    assert cfg.batch_size == expected
-
-
-@pytest.mark.parametrize("module", sorted(JURECA_BATCH))
-def test_every_preset_declares_both_batch_sizes(module):
-    """A preset missing `batch_size_40gib` would make every jureca_* cluster fail
-    to compose with an interpolation error rather than a readable message."""
-    cfg = build(module=module, dataloader="glorys", cluster="jupiter_1gpu")
+def test_every_preset_declares_a_batch_size(module):
+    """A preset missing `batch_size` makes every cluster fail to compose with an
+    interpolation error rather than a readable message."""
+    cfg = build(module=module, dataloader="glorys", cluster="jureca_1gpu")
     assert "batch_size" in cfg.module
-    assert "batch_size_40gib" in cfg.module
-    assert cfg.module.batch_size_40gib <= cfg.module.batch_size, (
-        "a 40 GiB card cannot take a bigger batch than a 96 GB one"
-    )
+    assert cfg.module.batch_size >= 1

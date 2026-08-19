@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
 # Fine-tune a pre-trained checkpoint on one GPU.  This is the path participants
-# actually use: the organisers pre-train `large` with
-# scripts/pretrain_large.slurm, you start from those weights.
+# actually use: the organisers pre-train `base` with
+# scripts/pretrain_base.slurm, you start from those weights.
 #
 #   sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune \
 #          scripts/finetune.slurm
@@ -38,7 +38,7 @@
 # Because the two are different, this script writes to a NEW exp_dir.  The
 # pre-trained checkpoint under modelstore/${FROM}/ is opened read-only and is
 # never written to -- which is the whole point, since on hackathon day one
-# `large` checkpoint is shared by everybody.  The script refuses to run if
+# shipped checkpoint is shared by everybody.  The script refuses to run if
 # NAME == FROM.
 #
 # `load_ckpt` calls `load_state_dict` in STRICT mode, so MODULE, the component
@@ -121,14 +121,11 @@ fi
 
 # Pin this process to exactly one card, whatever the allocation handed back.
 #
-# On JUPITER this was mandatory: the booster allocates WHOLE NODES, so --gres=gpu:1
-# came back with all four cards and Lightning's devices="auto" would shard the
-# data four ways inside this single process -- a quarter of the dataset, with a
-# loss curve that looks completely normal.  JURECA's dc-gpu is not whole-node, so
-# --gres=gpu:1 should really give one card and this line should be a no-op.
-# It is kept because it is a no-op when the allocation is already one GPU, and it
-# is the difference between a correct run and a silently quartered one when it
-# is not.
+# dc-gpu is not allocated whole-node, so --gres=gpu:1 really does give one card
+# and this line is a no-op.  It is kept because it costs nothing when the
+# allocation is already one GPU, and it is the difference between a correct run
+# and a silently quartered dataset when it is not: Lightning's devices="auto"
+# would shard the data across every visible card inside this single process.
 export CUDA_VISIBLE_DEVICES=0
 
 echo "=============================================================="

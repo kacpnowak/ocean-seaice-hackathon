@@ -5,13 +5,9 @@
 #   sbatch scripts/pretrain_base.slurm
 #   sbatch --export=ALL,NAME=base_v2,MAX_STEPS=72000 scripts/pretrain_base.slurm
 #
-# This is the kit's reference pre-training run since the `large` checkpoint was
-# withdrawn.  `large` cannot be trained OR fine-tuned on a dc-gpu A100 at all --
-# it needs 50.81 GiB at batch 1 with gradient checkpointing already on, against
-# 39.5 GiB available, and four GPUs do not help because Lightning's DDP
-# replicates the model on every rank (measured: all four ranks OOM at 39.4 GiB).
-# `base` at 84.6M parameters is the largest preset that does fit here, at
-# batch_size 1 per GPU (21.33 GiB peak).
+# This is the kit's reference pre-training run.  `base` at 84.6M parameters is
+# the largest preset that fits a dc-gpu A100, at batch_size 1 per GPU
+# (21.33 GiB peak).
 #
 # WHY 84000 STEPS.  Measured on one dc-gpu node, real dataloader, real metrics,
 # four DDP ranks: 2.18 it/s, i.e. 0.459 s per optimiser step.  With ~35

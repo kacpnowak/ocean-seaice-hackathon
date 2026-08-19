@@ -127,7 +127,7 @@ def _check_allocation(report: Report) -> None:
     """WARN whenever there is no allocation -- whatever CUDA says.
 
     Skipped entirely off SLURM (no `srun` on PATH): on a laptop the warning would
-    be noise, and the hostname prefixes below only mean anything on JUPITER.
+    be noise, and the hostname hint below is cosmetic.
     """
     if shutil.which("srun") is None:
         return
@@ -139,11 +139,11 @@ def _check_allocation(report: Report) -> None:
         )
         report.add(PASS, "allocation", detail)
         return
-    # Hostname is the secondary signal, never the only one: `jpbl-*` is a JUPITER
-    # login node and `jpbo-*` a booster node; JURECA's login nodes carry "login"
-    # in the name. A compute node reached by ssh has no SLURM_JOB_ID either and is
-    # just as shared, which is why the WARN above does not depend on this at all --
-    # the annotation is cosmetic and an unrecognised host simply loses it.
+    # Hostname is the secondary signal, never the only one: JURECA's login nodes
+    # carry "login" in the name. A compute node reached by ssh has no
+    # SLURM_JOB_ID either and is just as shared, which is why the WARN above does
+    # not depend on this at all -- the annotation is cosmetic and an unrecognised
+    # host simply loses it.
     where = " (a login node)" if host.startswith("jpbl") or "login" in host else ""
     report.add(
         WARN,

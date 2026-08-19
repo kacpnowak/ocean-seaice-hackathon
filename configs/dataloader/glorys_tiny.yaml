@@ -10,7 +10,7 @@
 # Use it with `module=tiny`:
 #     make train-tiny            # or
 #     python -m geoarches.main_hydra --config-path $PWD/configs \
-#         module=tiny dataloader=glorys_tiny cluster=jupiter_1gpu ++name=my_run
+#         module=tiny dataloader=glorys_tiny cluster=jureca_1gpu ++name=my_run
 # ---------------------------------------------------------------------------
 component: full
 
