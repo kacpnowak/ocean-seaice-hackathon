@@ -4,7 +4,7 @@
 # during the hackathon, you are expected to fine-tune it or evaluate against it.
 #
 #     python -m geoarches.main_hydra --config-path $PWD/configs mode=test \
-#         cluster=jupiter_1gpu module=large dataloader=glorys ++name=large_pretrained
+#         cluster=jupiter_1gpu module=large dataloader=glorys ++name=my_large_run
 #
 # configs/module/tiny.yaml carries the commentary; only the numbers differ here.
 # ---------------------------------------------------------------------------

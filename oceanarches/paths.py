@@ -170,7 +170,7 @@ def forcing_stats_file() -> Path:
 # the caller's own directory, and reports what it did.
 #: The runs docs/01 tells you to link in from the shared store.  Never ours to delete.
 SHIPPED_RUNS = frozenset(
-    {"task6_tiny", "ocean_tiny", "seaice_tiny", "seaice_isolated_tiny", "large_pretrained"}
+    {"base_pretrained", "task6_tiny", "ocean_tiny", "seaice_tiny", "seaice_isolated_tiny"}
 )
 
 

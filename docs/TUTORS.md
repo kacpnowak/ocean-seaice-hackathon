@@ -21,8 +21,8 @@ filesystems and are not mounted here.
 | prepared GLORYS, 1993--2025 | 92 GB, `data/glorys_1deg_prepped/` |
 | IFS forcing (optional, ~2024) | 833 MB, `data/ifs_1deg/` |
 | masks, normalisation, climatology | 94 MB, `oceanarches/stats/` |
-| the five shipped runs | 7.2 GB, `modelstore/` |
-| the `large` scorecard | 679 MB, `evalstore/large_pretrained/` |
+| the five shipped runs | 16 GB, `modelstore/` (of which `base_pretrained` is 14 GB) |
+| the `base` scorecard | 724 MB, `evalstore/base_pretrained/` |
 | the repository, with history and the `public` release branch | `git log` |
 
 **What deliberately did not, and why**
@@ -74,20 +74,25 @@ preset's `batch_size` was measured on a 96 GB GH200.
 | `make doctor` | passes, and now checks `$HOME` inode headroom |
 | `make test` | the suite, on x86_64 |
 | `make train-tiny` | 21.44 GiB peak at `batch_size 4`, 1.98 it/s, ~34 min |
-| `make eval NAME=large_pretrained` | fits and scores |
+| `make eval` on a `tiny`-class run | fits and scores |
+| `base` on 4 GPUs, real path | 2.18 it/s = 0.459 s/step, four DDP ranks -- the budget behind `scripts/pretrain_base.slurm` |
 
-**The one thing that does not fit: fine-tuning `large` on this card.** It needs
+**The one thing that does not fit, at all: `large` on this card.** It needs
 50.81 GiB at batch 1 with gradient checkpointing already on, against 39.5 GiB,
-and more GPUs do not help -- DDP replicates the model on every rank. Inference
-fits, so `large_pretrained` is fully usable for scoring and as a baseline; for
-fine-tuning, point participants at `base` or smaller. README and
+whether you are training it or fine-tuning it. More GPUs do not help -- measured:
+DDP replicates the model on every rank and all four died at 39.4 GiB. So the
+`large` checkpoint has been **withdrawn** ([section 3](#3-the-withdrawn-large-model-and-what-replaced-it))
+and `base` on four GPUs is the reference run instead. README and
 [docs/04](04_scaling_finetuning.md) both say this.
 
-**Still not re-measured:** `small`, `base` and `large` batch sizes beyond the
-`batch_size_40gib` numbers now in `configs/module/*.yaml` (`tiny` 4, `small` 2,
-`base` 1), and every wall-clock figure other than the two above. The GH200
-numbers were labelled rather than rewritten, because inventing numbers is worse
-than dating old ones -- re-measure what you intend to quote.
+**Still not re-measured:** `small`'s wall clock, `base` on ONE GPU (only the
+four-GPU figure above exists), and every other wall-clock number in the
+documents. Peak memory per preset IS measured -- `make benchmark` on this card
+gives `tiny` 21.44 GiB at batch 4, `small` 21.43 at 2, `base` 21.33 at 1, and
+`large` does not fit at any batch -- and those are the `batch_size_40gib` numbers
+in `configs/module/*.yaml`. The remaining GH200 figures were labelled rather than
+rewritten, because inventing numbers is worse than dating old ones -- re-measure
+what you intend to quote.
 
 If you rebuild from scratch on another machine, the order that works:
 
@@ -99,8 +104,8 @@ make test                      # 3: the suite, on this architecture
 srun --account=training2635 --partition=dc-gpu --gres=gpu:1 --ntasks=1 \
      --cpus-per-task=12 --time=01:00:00 --pty bash
 make benchmark                 # 4: peak memory per preset -- the batch-size answer
-make eval NAME=large_pretrained EVAL_ARGS="--n-inits 2 --lead-days 2 --skip-animations"
-                               # 5: proves the shipped checkpoint loads and scores here
+make eval NAME=task6_tiny EVAL_ARGS="--n-inits 2 --lead-days 2 --skip-animations"
+                               # 5: proves a shipped checkpoint loads and scores here
 ```
 
 ## 1. Before day one
@@ -111,8 +116,9 @@ make eval NAME=large_pretrained EVAL_ARGS="--n-inits 2 --lead-days 2 --skip-anim
 | ☑ | Prepared data, 92 GB, 1993--2025 | `data/glorys_1deg_prepped/` |
 | ☑ | Statistics, masks, climatology | `oceanarches/stats/` |
 | ☑ | Four small trained runs | `modelstore/{task6_tiny,ocean_tiny,seaice_tiny,seaice_isolated_tiny}` |
-| ☑ | The pre-trained `large` checkpoint | `modelstore/large_pretrained`, 75 000 steps -- [section 3](#3-the-pre-trained-large-model) |
-| ☑ | Its scorecard | `evalstore/large_pretrained/report.md` |
+| ☑ | The pre-trained `base` checkpoint | `modelstore/base_pretrained`, 84 000 steps, fits one A100 for scoring AND fine-tuning -- [section 3](#3-the-withdrawn-large-model-and-what-replaced-it) |
+| ☑ | Its scorecard | `evalstore/base_pretrained/report.md` |
+| ☒ | ~~The pre-trained `large` checkpoint~~ | **WITHDRAWN** -- neither trainable nor fine-tunable on a 40 GiB A100. |
 | ☑ | Public repository | `git@github.com:kacpnowak/ocean-seaice-hackathon.git` |
 
 ### The group is the whole gate
@@ -151,7 +157,7 @@ in one by one**:
 
 ```bash
 SHARED=/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice/modelstore
-for run in large_pretrained task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
+for run in task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
     ln -s $SHARED/$run modelstore/$run
 done
 ```
@@ -183,22 +189,64 @@ that every name in it is really in the store. Steps 1 and 4 are yours.
 
 ---
 
-## 3. The pre-trained `large` model
+## 3. The withdrawn `large` model, and what replaced it
 
-**Done, and shipped as `large_pretrained`.** 75 000 steps of `module=large` on
-4 nodes x 4 GH200 (16 ranks), `batch_size 1` per rank, `dataloader=glorys`,
-`lr 1e-4` with a 10 000-step warm-up. About 1.3 it/s per rank -- roughly 18 hours
-of wall clock across two launches, because that is more than the 12-hour QOS
-limit, which is the whole reason
-[section 3.2](#32-relaunching-after-the-wall-clock) exists. Final `val_loss`
-0.236, still falling at the end of the schedule.
+**`large_pretrained` has been deleted from the shared store, along with its
+scorecard.** It cannot be trained *or* fine-tuned on a JURECA dc-gpu A100: it
+needs 50.81 GiB at batch 1 with `gradient_checkpointing: True` already on,
+against 39.5 GiB available. Four GPUs do not help -- measured, all four DDP ranks
+OOM at 39.4 GiB, because Lightning replicates the model per rank rather than
+sharding it. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` does not help
+either, also measured. Shipping a 5.5 GB checkpoint that participants could only
+ever run inference on, in a kit whose whole point is that they train something,
+was the wrong trade.
 
-On the held-out test years it beats persistence on **every variable at every
-lead time** out to 10 days -- 36% on day-1 SST, 53% on sea surface height, 35%
-on sea-ice concentration -- and stays better than climatology for 23 days on SST
-and 29 on sea-ice concentration. `evalstore/large_pretrained/report.md` is the
-full scorecard, with 10 figures and 6 animations beside it; regenerate it with
-`make eval NAME=large_pretrained`.
+**It is probably recoverable if you want it back.** What was deleted here was the
+JURECA copy: `modelstore/large_pretrained/` (5.2 GB, the step-75 000 checkpoint
+only) and `evalstore/large_pretrained/` (736 MB). Per
+[section 3.4](#34-housekeeping), JUPITER's `modelstore/` held the full training
+directory -- 78 GB, fifteen checkpoints -- and no JUPITER filesystem is visible
+from JURECA, so that copy was not touched. Check there before assuming the 18
+GPU-hours are gone.
+
+**What it was, for the record.** 75 000 steps of `module=large` on 4 nodes x 4
+GH200 (16 ranks), `batch_size 1` per rank, `dataloader=glorys`, `lr 1e-4` with a
+10 000-step warm-up. About 1.3 it/s per rank -- roughly 18 hours of wall clock
+across two launches, because that is more than the 12-hour QOS limit, which is
+the whole reason [section 3.2](#32-relaunching-after-the-wall-clock) exists.
+Final `val_loss` 0.236, still falling. On the held-out test years it beat
+persistence on every variable at every lead time out to 10 days -- 36% on day-1
+SST, 53% on sea surface height, 35% on sea-ice concentration -- and stayed better
+than climatology for 23 days on SST. **Those numbers are no longer reproducible
+in this kit**; they are kept here as the shape of a good result, not as a claim.
+
+**The replacement is trained and shipped: `base_pretrained`.**
+[`scripts/pretrain_base.slurm`](../scripts/pretrain_base.slurm) produced it in
+**9 h 23 m** on one node (4 x A100-40GB), 84 000 steps, final `val_loss` 0.263
+against the withdrawn `large`'s 0.236 -- from a fifth of the parameters and a
+sixteenth of the GPUs. Measured 2.52 it/s against the 2.18 the budget assumed,
+which is where the 2.5 h of margin inside the 12 h window came from.
+
+| | |
+|---|---|
+| beats 1-day persistence | **all 17 scored variables, every lead time to day 10** |
+| day-1 gains | SSH -50%, SST -31%, `siconc` -36%, `so` at 1684 m -50% |
+| against `tiny`, identical samples | loss **0.978** vs 2.114 (persistence 2.261) |
+| 90-day free run | SST RMSE **2.4 degC** (clim 0.68); **0.07%** of cells outside [-5, 40] degC, min -10.9 |
+| `tiny` on the same test | 15-20 degC, 19-22% of cells outside, minima -514 |
+| fits one dc-gpu A100 | scoring **and** fine-tuning, `batch_size 1`, 21.33 GiB -- both tested |
+
+**It did not fix everything, and the documents say so.** Sea-ice *extent bias* is
+still worse than persistence in both hemispheres at every lead time -- NH +0.032
+at day 1 against persistence's -0.018, +0.414 by day 10, i.e. systematically too
+much ice. `tiny` had the same failure and `base` inherited it. Every RMSE and
+ice-edge number improved; that one did not, and it is a real thing for a team to
+go after.
+
+**Housekeeping you may want to do.** `modelstore/base_pretrained/` is **14 GB**
+across fourteen checkpoints and `load_module` reads only the newest (step 84 000,
+1.0 GB). Participants symlink the directory, so the other thirteen cost them
+nothing and cost you 13 GB. Thin it if you want the space; nothing depends on them.
 
 ### 3.1 The learning rate is not a free knob
 
@@ -237,25 +285,19 @@ before blaming the network** -- a rank-0 refusal is now the last thing in it.
 
 ### 3.3 Staging the finished checkpoint
 
-Already done for `large_pretrained` -- this is the recipe for the next one.
+This is the recipe for staging any finished run, and the one waiting for it is
+the `base` run from [section 3](#3-the-withdrawn-large-model-and-what-replaced-it).
 Follow [section 2](#adding-a-run-to-the-shipped-set): the run directory, then
-`SHIPPED_RUNS`, then the loop in docs/01, then a release. `load_module` takes
-the newest checkpoint in `checkpoints/`, so the run directory is what ships and
-the intermediate checkpoints are dead weight rather than a problem
+`SHIPPED_RUNS`, then the loop in docs/01, then a release. `load_module` takes the
+newest checkpoint in `checkpoints/`, so the run directory is what ships and the
+intermediate checkpoints are dead weight rather than a problem
 ([section 3.4](#34-housekeeping)).
 
-**On JURECA, participants score it rather than fine-tune it.** `large` needs
-50.81 GiB to train at batch 1 with gradient checkpointing on, and a dc-gpu A100
-has 39.5 GiB; more GPUs do not help, because DDP replicates the model per rank.
-`make eval NAME=large_pretrained` fits and is tested, so it works as a baseline
-and as the thing their own model has to beat. **Fine-tuning is `base` or
-smaller here.**
-
-On a 96 GB GH200 the fine-tune path is two hours on one card:
+**Fine-tuning on JURECA means `base` or smaller.** `large` does not fit at all
+(above). The fine-tune path against a preset that does:
 
 ```bash
-sbatch --export=ALL,FROM=large_pretrained,MODULE=large,NAME=my_finetune \
-    scripts/finetune.slurm
+sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune_tiny scripts/finetune.slurm
 ```
 
 **`MODULE=large` is the part they will forget.** It defaults to `tiny`, and
@@ -266,15 +308,18 @@ reason that guard is in it. See [docs/04](04_scaling_finetuning.md).
 
 ### 3.4 Housekeeping
 
-`modelstore/` currently holds ~102 GB, of which two directories are almost all
-of it:
+**On JURECA** `modelstore/` now holds ~2.0 GB: the four `tiny`-class runs and
+nothing else. The `large` directories below were never copied here, and the one
+5.2 GB checkpoint that was has been deleted
+([section 3](#3-the-withdrawn-large-model-and-what-replaced-it)).
+
+**On JUPITER**, where the kit was built, `modelstore/` held ~102 GB, of which two
+directories were almost all of it. This is the copy to go to if you want the
+withdrawn model back:
 
 * `large_pretrained_diverged_lr2e-4/` -- 47 GB, the failed `2e-4` run. Keep one
   checkpoint if you want the evidence; the other nine are worth nothing.
-* `large_pretrained/` -- 78 GB, fifteen checkpoints. Participants symlink the
-  directory and `load_module` takes the newest, so the other fourteen cost them
-  nothing and cost you 72 GB. Thin it if you want the space; nothing depends on
-  them once step 75 000 is written.
+* `large_pretrained/` -- 78 GB, fifteen checkpoints, including step 75 000.
 
 Plus a handful of rehearsal runs (`probe`, `t10_*`, `t12_*`, `docs_tiny`) that
 are not in `SHIPPED_RUNS` and are nobody's dependency.

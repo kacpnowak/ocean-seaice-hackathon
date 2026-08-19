@@ -54,7 +54,7 @@ make stats
 #    YOUR OWN modelstore/, with the shipped runs linked in one by one
 mkdir -p modelstore
 SHARED=/p/scratch/training2635/4_ocean_ai/nowak2/hackathon-ocean-sea-ice/modelstore
-for run in large_pretrained task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
+for run in base_pretrained task6_tiny ocean_tiny seaice_tiny seaice_isolated_tiny; do
     ln -s $SHARED/$run modelstore/$run
 done
 
@@ -94,15 +94,29 @@ NAME=task6_tiny` used to exit 0 having trained and saved nothing; it is now
 refused at startup, and the message offers a fresh name, a longer `++max_steps`
 or `make eval`.
 
-The runs the documents use by name are `large_pretrained` -- **the pre-trained
-model you fine-tune** (docs/04) -- `task6_tiny` (docs/04, docs/06, docs/07, the
-cheatsheet), and `ocean_tiny` + `seaice_tiny` + `seaice_isolated_tiny` (docs/05,
-docs/07). Without step 3, every `[GOOD FIRST]` experiment that needs no training
-will stop at "no such run".
+The runs the documents use by name are `base_pretrained` -- **the pre-trained
+model you start from** (docs/04, docs/06) -- `task6_tiny` (docs/04, docs/06,
+docs/07, the cheatsheet), and `ocean_tiny` + `seaice_tiny` +
+`seaice_isolated_tiny` (docs/05, docs/07). Without step 3, every `[GOOD FIRST]`
+experiment that needs no training will stop at "no such run".
 
-`large_pretrained` is 78 GB and the other four are under 1 GB each. **Linking
-costs you none of it** -- a symlink is a symlink, the bytes stay in the shared
-store, and you only ever read them.
+**`base_pretrained` is the one to know about.** 84.6M parameters, 84 000 steps on
+one JURECA node (4 x A100) in 9 h 23 m, and on the held-out test years it beats
+1-day persistence on every one of the 17 scored variables at every lead time out
+to 10 days. You can score it *and* fine-tune it on a single dc-gpu A100 -- both
+are tested. [docs/04](04_scaling_finetuning.md#the-two-slurm-scripts) is the
+fine-tuning path.
+
+An earlier version of the kit shipped a pre-trained `large` instead. **It has been
+withdrawn**, because it cannot be trained or fine-tuned on a dc-gpu A100 at all:
+50.81 GiB at batch 1 with gradient checkpointing already on, against 39.5 GiB,
+and four GPUs do not change that (DDP replicates the model per rank). `base` is
+the largest preset that fits this card.
+
+`base_pretrained` is 14 GB of checkpoints and the other four are under 1 GB each.
+**Linking costs you none of it** -- a symlink is a symlink, the bytes stay in the
+shared store, `load_module` reads only the newest checkpoint, and you only ever
+read them.
 
 The data itself is the one thing you do not have to rebuild: `config.env` already
 points `GLORYS_PREPPED` at `nowak2`'s prepared 92 GB, which is read-only to you,

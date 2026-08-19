@@ -4,7 +4,7 @@ Use it exactly like `geoarches.main_hydra` -- same flags, same config groups,
 same `--config-path` rule::
 
     .venv/bin/python -m oceanarches.main_multinode --config-path $PWD/configs \\
-        cluster=jureca_4nodes module=large dataloader=glorys ++name=large_pretrained
+        cluster=jureca_4nodes module=large dataloader=glorys ++name=my_large_run
 
 ---------------------------------------------------------------------------
 Why this module exists

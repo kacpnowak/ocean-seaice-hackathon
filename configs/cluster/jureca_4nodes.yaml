@@ -2,9 +2,11 @@
 # This is the ORGANISERS' pre-training configuration; a participant wants
 # jureca_1gpu or jureca_4gpu.
 #
-# You are unlikely to need this at the hackathon: `large` is ALREADY pre-trained
-# and shipped as `modelstore/large_pretrained` (75 000 steps, done on JUPITER).
-# Fine-tune it on one GPU instead -- docs/04.
+# This is how you would train `large` yourself, and at the hackathon it is the
+# ONLY way to get one: no pre-trained `large` ships with the kit any more.  Note
+# that `large` does not fit a dc-gpu A100 even at batch 1 with gradient
+# checkpointing (see configs/module/large.yaml), so this config cannot train it
+# here either -- it is kept for a machine whose cards are big enough.
 #
 #   sbatch scripts/pretrain_large.slurm
 #

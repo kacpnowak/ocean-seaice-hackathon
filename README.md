@@ -163,36 +163,53 @@ day.
 
 ## You do not have to start from `tiny`
 
-**A pre-trained `large` model ships with the kit** -- 459.6M parameters, 75 000
-steps on 16 GH200s, about 18 hours of wall clock that you do not have to spend.
-Link it in ([docs/01 section 1.1](docs/01_setup.md#the-normal-route)).
-
-**You can score it on JURECA, but you cannot fine-tune it there.** `large` needs
-50.81 GiB at batch 1 *with* gradient checkpointing already on, and a dc-gpu A100
-has 39.5 GiB, so the fine-tuning path in
-[docs/04](docs/04_scaling_finetuning.md#the-two-slurm-scripts) -- measured at two
-hours on one GH200 -- dies on its first step here, and more GPUs do not help
-(DDP replicates the model on every rank). What does work on one A100:
-
-* **`make eval` on `large_pretrained`** -- inference has no optimiser state and no
-  stored activations, and it fits comfortably. Tested.
-* **fine-tuning `base` or smaller.** `make benchmark` prints what fits.
-
-That is a property of the card, not of the kit, and the scorecard below was
-measured on the GH200 run rather than reproduced here.
+**A pre-trained `base` model ships with the kit** -- 84.6M parameters, 84 000
+steps on one JURECA node (4 x A100-40GB) in 9 h 23 m. Link it in
+([docs/01 section 1.1](docs/01_setup.md#the-normal-route)), then **score it and
+fine-tune it on a single dc-gpu A100** -- both are tested, and fine-tuning starts
+from a training loss of 0.20 rather than 35.
 
 On the held-out test years it beats 1-day persistence on **every one of the 17
-scored variables at every lead time out to 10 days** -- 36% on day-1 SST, 53% on
-sea surface height, 35% on sea-ice concentration -- and it stays better than
-climatology for 23 days on SST and 29 on sea-ice concentration.
+scored variables at every lead time out to 10 days**:
 
-It drifts too, just far less violently: on the same 90-day free run its SST RMSE
-reaches 2.1 degC against a climatology's 0.68, and its global-mean SST ends
-0.37 degC off the truth. Three times climatology is a model that has run out of
-information and wandered; 15 to 20 degC is a model that has left the attractor.
-**Neither is solved, and both are yours to improve.**
-`evalstore/large_pretrained/report.md` in the shared store has the full
-scorecard, ten figures and six animations.
+| | day 1 | day 10 |
+|---|---|---|
+| sea surface height | **-50%** | -19% |
+| sea surface temperature | **-31%** | -20% |
+| sea ice concentration | **-36%** | -18% |
+| salinity at 1684 m | **-50%** | -14% |
+| northward velocity at 0 m | **-50%** | -29% |
+
+It stays better than climatology for 22 days on SST, 25 on sea-ice concentration
+and 66 on ice thickness. Against the shipped `tiny` model on identical samples it
+more than halves the loss -- **0.978 against 2.114**, where 1-day persistence
+scores 2.261.
+
+**And it does not leave the attractor.** Rolled out freely for 90 days its SST
+RMSE reaches 2.4 degC against a climatology's 0.68, and **0.07% of ocean cells
+(30 of 45 115) fall outside [-5, 40] degC**, with a minimum of -10.9. Compare
+`tiny` on the same test: 15 to 20 degC, 19-22% of cells unphysical, minima of
+-514 degC. That is the difference capacity makes to a single-step-trained
+autoregressive model, and it is why the drift problem in
+[docs/06](docs/06_evaluation.md#65-the-90-day-free-run-and-what-it-tells-you) is
+worth working on rather than hopeless.
+
+**One thing it does not fix, and it is on the list on purpose.** Sea-ice *extent
+bias* is still worse than persistence, in both hemispheres and at every lead time
+-- Northern Hemisphere +0.032 at day 1 against persistence's -0.018, growing to
++0.414 at day 10. The model systematically grows too much ice. `tiny` had the same
+failure, and `base` inherited rather than solved it. Every RMSE and ice-edge
+number above improved; this one did not.
+
+`evalstore/base_pretrained/report.md` in the shared store has the full scorecard.
+
+**A pre-trained `large` used to ship here and has been withdrawn.** It needs
+50.81 GiB at batch 1 with gradient checkpointing already on, against a dc-gpu
+A100's 39.5 GiB, so on this machine it can be neither trained nor fine-tuned --
+and four GPUs do not help, because DDP replicates the model on every rank
+(measured: all four ranks died at 39.4 GiB). `base` is the largest preset that
+fits, and [`scripts/pretrain_base.slurm`](scripts/pretrain_base.slurm) is how the
+model above was made, in one 12-hour window, should you want to train your own.
 
 ## The three open questions
 

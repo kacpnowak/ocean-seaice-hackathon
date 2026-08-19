@@ -257,6 +257,7 @@ print(type(m).__name__, m.component.name, sum(p.numel() for p in m.parameters())
 | splits | train 9488 / val 730 / test 1094 / holdout 730 samples |
 | the line to beat | 1-day persistence loss **0.82-0.87**, moves with the split |
 | `tiny` | 13.2 M parameters, 29-31 min on one GH200 / **~34 min on a JURECA A100**, 12.8% better than persistence |
+| `base_pretrained` | **the shipped model.** 84.6 M parameters, 84 000 steps, 9 h 23 m on 4 x A100. Beats 1-day persistence on all 17 scored variables to day 10; loss 0.978 against `tiny`'s 2.114 on identical samples. Day-90 free run 2.4 degC SST with 0.07% of cells unphysical, against `tiny`'s 15-20 degC and 19-22%. Scores AND fine-tunes on one A100 at `batch_size 1`. Still worse than persistence on sea-ice EXTENT BIAS. |
 | JURECA batch sizes | dc-gpu is an **A100-SXM4-40GB** (39.5 GiB usable), not the 96 GB GH200 the presets were sized for. Measured with `make benchmark`: `tiny` **4** (21.44 GiB), `small` **2** (21.43), `base` **1** (21.33), `large` **does not fit at all** (needs 50.81 at batch 1 with checkpointing on). `cluster=jureca_*` reads these from each preset's `batch_size_40gib`, so you do not pass anything. |
 | day-1 SST | model 0.125 degC, persistence 0.131 degC |
 | a full `make eval` | 232-246 s cold, ~5 s warm, ~4 s warm with `--skip-animations`; 10 figures, 6 animations, 2 reports, ~750 MB |

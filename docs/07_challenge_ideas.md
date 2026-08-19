@@ -751,13 +751,16 @@ answer is to forecast only the interior.
 | 3a | 0.25 degrees, globally | hard | a day+ | |
 | 3b | 0.25 degrees, one region | hard | a day | |
 
-And two that are not on the list above but are the highest-value things in the
-kit, because the shipped model is measurably bad at both:
+And three that are not on the list above but are the highest-value things in the
+kit, because a shipped model is measurably bad at each of them. 4a and 4c are open
+on **both** shipped models; 4b is open on `tiny` and already solved by
+`base_pretrained`, which makes it the cleanest of the three to measure against:
 
 | # | experiment | difficulty | GPU time |
 |---|---|---|---|
 | 4a | **stop the 90-day rollout diverging** ([docs/06](06_evaluation.md#65-the-90-day-free-run-and-what-it-tells-you)). Multi-step training, harder clamping, a drift penalty, noise on the inputs. Measure it with `--free-days 90` before and after. | medium | ~1 h per attempt |
-| 4b | **make deep salinity better than persistence** ([docs/06](06_evaluation.md#the-two-places-it-loses-which-you-should-go-after)). It is currently 11% worse at day 1 and 19% worse at day 10. Look at the loss weights and at what `add_input_state` gives you for free. | easy | ~40 min |
+| 4b | **make deep salinity better than persistence** on a `tiny`-class model ([docs/06](06_evaluation.md#the-two-places-it-loses-which-you-should-go-after)). `tiny` is 11% worse at day 1 and 19% worse at day 10. **Capacity alone fixes this** -- the shipped `base_pretrained` is 50% BETTER at day 1 and 14% at day 10 -- so the interesting version is doing it at `tiny`'s size and cost. Look at the loss weights and at what `add_input_state` gives you for free. | easy | ~40 min |
+| 4c | **fix the sea-ice extent bias**, which nothing has. Both shipped models grow too much ice and both are worse than persistence at it: `base_pretrained` is +0.032 x 10^6 km^2 at day 1 against persistence's -0.018, and +0.414 by day 10. Every RMSE and ice-edge number in that model beats persistence; this one does not, at any lead time or hemisphere. Start from the loss weighting on `siconc` and from whether a concentration clamp is doing what you think at the ice edge. | medium | ~1 h per attempt |
 
 ---
 

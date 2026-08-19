@@ -4,7 +4,7 @@
 # actually use: the organisers pre-train `large` with
 # scripts/pretrain_large.slurm, you start from those weights.
 #
-#   sbatch --export=ALL,FROM=large_pretrained,NAME=my_finetune \
+#   sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune \
 #          scripts/finetune.slurm
 #
 # Everything is an environment variable with a default, so the common case is

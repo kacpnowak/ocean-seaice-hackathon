@@ -435,47 +435,58 @@ want that, you have to copy the weights layer by layer yourself.
 Everything above is a command line you type inside an `srun`. For the two long
 jobs there are batch scripts, so you can submit them and go away.
 
-**On JURECA, the `large` line below does not run.** `large` was measured at
-50.81 GiB at batch 1 with `gradient_checkpointing: True` already on, and a dc-gpu
-A100 has 39.5 GiB. It dies on its first optimiser step with an out-of-memory
-error, and the guard now says so in as many words rather than advising you to
-halve a batch that is already 1. Four GPUs do not fix it either: Lightning runs
-DDP, which replicates the whole model on every rank, so per-rank memory is
-unchanged. Sharding (FSDP/ZeRO-3) would recover only a few GiB, because what does
-not fit is the activations and those are per-rank whatever you shard.
+**`base_pretrained` is the checkpoint this challenge is built around.** 84 000
+steps of `module=base` on one JURECA node (4 x A100-40GB) in 9 h 23 m, final
+`val_loss` 0.263. On the held-out test years it beats 1-day persistence on every
+one of the 17 scored variables at every lead time out to 10 days -- 50% better on
+day-1 sea surface height, 31% on SST, 36% on sea-ice concentration, 50% on deep
+salinity -- and its 90-day free run keeps 99.93% of ocean cells inside
+[-5, 40] degC where `tiny` puts 19-22% outside. [docs/06](06_evaluation.md)
+explains what those numbers mean and how to produce them for your own model;
+`evalstore/base_pretrained/report.md` in the shared store is its full scorecard.
 
-**`large_pretrained` is still fully usable on one A100 -- for inference.**
-`make eval NAME=large_pretrained` has no optimiser state and no stored
-activations and fits comfortably; that is tested. Fine-tune `base` or smaller, or
-find a bigger card.
+**Start from it rather than training from scratch: you have a day, and this was
+9 h 23 m on four GPUs.** Both scoring and fine-tuning fit a single dc-gpu A100 at
+`batch_size 1` (21.33 GiB peak), and both are tested -- a fine-tune resumes from a
+training loss of 0.20 rather than the 35 a fresh `base` starts at, which is how you
+can tell the weights really loaded.
 
 ```bash
-# THE MAIN PATH ON A 96 GB GH200 -- see the note above, it OOMs on a 40 GiB A100.
-# MODULE=large is not optional -- it must be the preset FROM was trained with.
-sbatch --export=ALL,FROM=large_pretrained,MODULE=large,NAME=my_finetune \
+# THE MAIN PATH: fine-tune the pre-trained `base` model on one GPU.
+# MODULE=base is not optional -- it must be the preset FROM was trained with.
+sbatch --export=ALL,FROM=base_pretrained,MODULE=base,NAME=my_finetune \
     scripts/finetune.slurm
 
-# the same thing against the 31-minute model, if you want a quick loop first
+# fine-tune the 31-minute model instead, if you want a quicker loop first
 sbatch --export=ALL,FROM=task6_tiny,NAME=my_finetune_tiny scripts/finetune.slurm
 
-# what the ORGANISERS ran before the hackathon: `large` on 4 nodes x 4 GH200
+# train a `base` from scratch, one node, one 12-hour window -- how the shipped
+# model above was made
+sbatch scripts/pretrain_base.slurm
+
+# what the ORGANISERS ran on JUPITER, and what a 40 GiB card cannot: `large`
+# on 4 nodes x 4 GH200
 sbatch scripts/pretrain_large.slurm
 ```
 
-**`large_pretrained` is the checkpoint this challenge is built around.** It is
-75 000 steps of `module=large` at `lr 1e-4`, trained on 1993--2018 across 16
-GH200s, and on the held-out test years it beats persistence on *every* variable
-at *every* lead time out to 10 days -- 36% better on day-1 SST, 53% on sea
-surface height, 35% on sea-ice concentration -- and stays better than
-climatology for 23 days on SST and 29 on sea-ice concentration.
-[docs/06](06_evaluation.md) explains what those numbers mean and how to produce
-them for your own model; `evalstore/large_pretrained/report.md` in the shared
-store is its full scorecard.
+[`scripts/pretrain_base.slurm`](../scripts/pretrain_base.slurm) runs **84 000
+steps**, not the preset's 110 000. Measured on one dc-gpu node with the real
+dataloader, the real metrics and four DDP ranks: **2.18 it/s** budgeted and 2.52
+achieved, so 84 000 steps came in at 9 h 23 m against the preset's 110 000 at a
+projected 14.2 h, which does not fit a window. `num_training_steps` follows
+`max_steps`, so the shorter budget is a complete annealed run rather than one that
+was cut off. Remember that `max_steps` counts optimiser steps and four ranks do
+not divide it -- what they buy is 4 samples per step instead of 1.
 
-Start from it rather than training from scratch: you have a day, and the
-pre-training was 18 hours on 16 GPUs. **On a 40 GiB A100 that means scoring
-against it, not fine-tuning it** -- see the memory note above -- so it is your
-baseline and the thing your own model has to beat. Fine-tune `base` or smaller.
+**A pre-trained `large` used to ship here, and has been withdrawn.** It was
+measured at 50.81 GiB at batch 1 with `gradient_checkpointing: True` already on,
+and a dc-gpu A100 has 39.5 GiB, so it OOMs on its first optimiser step whether you
+are training or fine-tuning. Four GPUs do not fix it -- **measured**: Lightning
+runs DDP, which replicates the whole model on every rank, and all four ranks died
+at 39.4 GiB. `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` does not fix it
+either, also measured; the ~900 MiB of fragmentation it recovers is not the 11 GiB
+the model is over by. Sharding (FSDP/ZeRO-3) would recover only a few GiB, because
+what does not fit is the activations and those are per-rank whatever you shard.
 
 [`scripts/finetune.slurm`](../scripts/finetune.slurm) is (b) above with the
 mistakes made impossible. Every knob is an environment variable with a default
